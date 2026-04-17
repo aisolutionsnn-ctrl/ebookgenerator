@@ -97,3 +97,27 @@ Stage Summary:
 - MOBI export (when Calibre available)
 - Token/cost tracking
 - Health check API
+
+---
+Task ID: 4
+Agent: Main
+Task: Fix hydration mismatch error caused by dark mode toggle
+
+Work Log:
+- Diagnosed root cause: custom `useDarkMode` hook checked `localStorage` and `matchMedia` during initialization, causing server/client HTML mismatch (server always renders Moon icon, client might render Sun icon if dark mode preferred)
+- Replaced custom `useDarkMode` hook with `next-themes` library (already in package.json)
+- Created `src/components/theme-provider.tsx` — proper client component wrapper for `ThemeProvider`
+- Updated `layout.tsx` to use client `ThemeProvider` wrapper with `attribute="class"`, `defaultTheme="system"`, `enableSystem`, `disableTransitionOnChange`
+- Added `suppressHydrationWarning` to `<html>` tag (required by next-themes)
+- Updated `page.tsx`: replaced `useDarkMode` with `useTheme` from next-themes
+- Added `mounted` state pattern to avoid rendering theme-dependent UI until client-side hydration completes
+- Dark mode toggle now renders a disabled placeholder button during SSR, then switches to the real toggle after mount
+- Cleared `.next` build cache to ensure fresh compilation
+- Verified lint passes with no errors
+- Verified API endpoints return 200 (GET /, GET /api/books)
+
+Stage Summary:
+- Hydration mismatch fully resolved by using next-themes with mounted guard pattern
+- Dark mode toggle now SSR-safe: renders Moon icon placeholder on server, correct icon on client
+- Clean client component wrapper for ThemeProvider follows Next.js App Router best practices
+- All existing functionality preserved (localStorage persistence, system preference detection)

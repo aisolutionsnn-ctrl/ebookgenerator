@@ -67,6 +67,8 @@ export default function Home() {
   const [bookData, setBookData] = useState<BookData | null>(null);
   const [books, setBooks] = useState<BookListItem[]>([]);
   const { theme, setTheme } = useTheme();
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
 
   // Form state
   const [prompt, setPrompt] = useState("");
@@ -219,10 +221,15 @@ export default function Home() {
           </nav>
 
           <div className="ml-auto flex items-center gap-2">
-            <Button variant="ghost" size="icon" onClick={() => setTheme(theme === "dark" ? "light" : "dark")} title="Toggle dark mode">
-              <Sun className="w-4 h-4 rotate-0 scale-100 transition-all dark:-rotate-90 dark:scale-0" />
-              <Moon className="absolute w-4 h-4 rotate-90 scale-0 transition-all dark:rotate-0 dark:scale-100" />
-            </Button>
+            {mounted ? (
+              <Button variant="ghost" size="icon" onClick={() => setTheme(theme === "dark" ? "light" : "dark")} title="Toggle dark mode">
+                {theme === "dark" ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
+              </Button>
+            ) : (
+              <Button variant="ghost" size="icon" disabled title="Toggle dark mode">
+                <Moon className="w-4 h-4" />
+              </Button>
+            )}
           </div>
         </div>
       </header>
