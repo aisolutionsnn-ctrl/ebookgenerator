@@ -1,13 +1,14 @@
 // E-book Generator - Prisma Schema
-// SQLite for MVP; can be migrated to Postgres later.
+// PostgreSQL via Supabase
 
 generator client {
   provider = "prisma-client-js"
 }
 
 datasource db {
-  provider = "sqlite"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
 }
 
 model Book {
