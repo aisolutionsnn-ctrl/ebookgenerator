@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
-import { useTheme } from "next-themes";
 import {
   BookOpen, Download, FileText, Loader2, CheckCircle2, Circle,
   Clock, AlertCircle, Sparkles, ChevronDown, ChevronUp, RotateCcw,
@@ -59,6 +58,29 @@ interface BookListItem {
 
 type ViewMode = "landing" | "generate" | "progress" | "history" | "dashboard";
 
+// ─── Dark Mode Hook ───────────────────────────────────────────────────
+
+function useDarkMode() {
+  const [dark, setDark] = useState(() => {
+    if (typeof window === "undefined") return false;
+    const saved = localStorage.getItem("ebook-dark-mode");
+    const prefersDark = saved === "true" || (!saved && window.matchMedia("(prefers-color-scheme: dark)").matches);
+    if (prefersDark) document.documentElement.classList.add("dark");
+    return prefersDark;
+  });
+
+  const toggle = useCallback(() => {
+    setDark((prev) => {
+      const next = !prev;
+      document.documentElement.classList.toggle("dark", next);
+      localStorage.setItem("ebook-dark-mode", String(next));
+      return next;
+    });
+  }, []);
+
+  return { dark, toggle };
+}
+
 // ─── Main App ─────────────────────────────────────────────────────────
 
 export default function Home() {
@@ -66,9 +88,7 @@ export default function Home() {
   const [activeBookId, setActiveBookId] = useState<string | null>(null);
   const [bookData, setBookData] = useState<BookData | null>(null);
   const [books, setBooks] = useState<BookListItem[]>([]);
-  const { theme, setTheme } = useTheme();
-  const [mounted, setMounted] = useState(false);
-  useEffect(() => setMounted(true), []);
+  const { dark, toggle: toggleDark } = useDarkMode();
 
   // Form state
   const [prompt, setPrompt] = useState("");
@@ -221,15 +241,9 @@ export default function Home() {
           </nav>
 
           <div className="ml-auto flex items-center gap-2">
-            {mounted ? (
-              <Button variant="ghost" size="icon" onClick={() => setTheme(theme === "dark" ? "light" : "dark")} title="Toggle dark mode">
-                {theme === "dark" ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
-              </Button>
-            ) : (
-              <Button variant="ghost" size="icon" disabled title="Toggle dark mode">
-                <Moon className="w-4 h-4" />
-              </Button>
-            )}
+            <Button variant="ghost" size="icon" onClick={toggleDark} title="Toggle dark mode">
+              {dark ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
+            </Button>
           </div>
         </div>
       </header>
