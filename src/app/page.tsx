@@ -13,6 +13,7 @@ import {
   Sparkles,
   ChevronDown,
   ChevronUp,
+  RotateCcw,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -68,6 +69,7 @@ export default function Home() {
   const [tone, setTone] = useState("Informative and engaging");
   const [lengthHint, setLengthHint] = useState("Medium (8-12 chapters)");
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isResuming, setIsResuming] = useState(false);
 
   // Chapter preview
   const [expandedChapter, setExpandedChapter] = useState<number | null>(null);
@@ -148,6 +150,29 @@ export default function Home() {
     setExpandedChapter(null);
   };
 
+  // ── Resume a failed book ──────────────────────────────────────
+
+  const handleResume = useCallback(async () => {
+    if (!activeBookId) return;
+    setIsResuming(true);
+    try {
+      const res = await fetch(`/api/books/${activeBookId}/resume`, {
+        method: "POST",
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "Failed to resume book");
+      }
+      // Re-start polling
+      setBookData(null);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Unknown error";
+      alert(message);
+    } finally {
+      setIsResuming(false);
+    }
+  }, [activeBookId]);
+
   // ── Progress calculation ────────────────────────────────────────
 
   const getProgress = (): number => {
@@ -218,6 +243,8 @@ export default function Home() {
             progress={getProgress()}
             expandedChapter={expandedChapter}
             setExpandedChapter={setExpandedChapter}
+            onResume={handleResume}
+            isResuming={isResuming}
           />
         )}
       </main>
@@ -373,11 +400,15 @@ function BookProgress({
   progress,
   expandedChapter,
   setExpandedChapter,
+  onResume,
+  isResuming,
 }: {
   book: BookData;
   progress: number;
   expandedChapter: number | null;
   setExpandedChapter: (n: number | null) => void;
+  onResume: () => void;
+  isResuming: boolean;
 }) {
   const isDone = book.status === "DONE";
   const isFailed = book.status === "FAILED";
@@ -447,13 +478,30 @@ function BookProgress({
           {isFailed && book.errorMessage && (
             <div className="rounded-lg border border-destructive/50 bg-destructive/5 p-4 flex items-start gap-3">
               <AlertCircle className="w-5 h-5 text-destructive shrink-0 mt-0.5" />
-              <div>
+              <div className="flex-1">
                 <p className="font-medium text-destructive">
                   Generation Failed
                 </p>
                 <p className="text-sm text-muted-foreground mt-1">
                   {book.errorMessage}
                 </p>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="mt-3"
+                  onClick={onResume}
+                  disabled={isResuming}
+                >
+                  {isResuming ? (
+                    <>
+                      <Loader2 className="w-4 h-4 mr-1 animate-spin" /> Resuming...
+                    </>
+                  ) : (
+                    <>
+                      <RotateCcw className="w-4 h-4 mr-1" /> Resume from Checkpoint
+                    </>
+                  )}
+                </Button>
               </div>
             </div>
           )}
