@@ -2,17 +2,20 @@
  * Job Queue & Orchestration Module (MVP)
  *
  * Manages the full e-book generation pipeline:
- *   Phase 1: Planning  — generate title, subtitle, ToC
+ *   Phase 1: Planning  — generate title, subtitle, ToC + metadata
  *   Phase 2: Writing   — generate each chapter (Writer + Editor)
- *   Phase 3: Exporting — produce EPUB and PDF files
+ *   Phase 3: Exporting — produce EPUB, PDF, MOBI + cover image
  *
  * Features:
- *   - Resume capability: if a job fails (e.g., rate limit), it can be
- *     resumed from where it left off.
- *   - Rate-limit protection: configurable delay between LLM calls.
+ *   - Resume capability: if a job fails, it can be resumed from where it left off
+ *   - Rate-limit protection: configurable delay between LLM calls
+ *   - Token tracking: records token usage for cost estimation
+ *   - Multi-language support via i18n module
+ *   - Auto metadata generation (keywords, abstract, copyright)
+ *   - Book cover generation (AI image)
+ *   - PDF template selection
  *
- * MVP note: This uses an in-memory queue with sequential processing.
- * For production, replace with BullMQ + Redis for durability and concurrency.
+ * MVP note: In-memory queue. For production, use BullMQ + Redis.
  */
 
 import { db } from "./db";
@@ -23,14 +26,20 @@ import {
   summarizeChapter,
   type BookContext,
 } from "./chapterGenerator";
-import { exportToEpub } from "./exportEpub";
+import { exportToEpub, type EpubMetadata } from "./exportEpub";
 import { exportToPdf } from "./exportPdf";
+import { exportToMobi, isCalibreAvailable } from "./exportMobi";
+import { generateBookMetadata } from "./metadataGenerator";
+import { generateBookCover } from "./coverGenerator";
+import { createTokenTracker, TokenTracker } from "./tokenTracker";
+import { type LanguageCode } from "./i18n";
+import { type PdfTemplate } from "./pdfTemplates";
 import { join } from "path";
 
 // ─── Config ───────────────────────────────────────────────────────────
 
 /** Delay between LLM calls to avoid rate limits (ms) */
-const INTER_CALL_DELAY = 8_000; // 8 seconds between API calls
+const INTER_CALL_DELAY = 8_000;
 
 // ─── Types ────────────────────────────────────────────────────────────
 
@@ -47,10 +56,6 @@ type JobFn = () => Promise<void>;
 const queue: JobFn[] = [];
 let isProcessing = false;
 
-/**
- * Enqueue a book generation job.
- * Jobs are processed sequentially (one at a time).
- */
 export function enqueueBookJob(bookId: string): void {
   const job: JobFn = async () => {
     await runBookPipeline(bookId);
@@ -60,9 +65,6 @@ export function enqueueBookJob(bookId: string): void {
   processQueue();
 }
 
-/**
- * Process the next job in the queue (if not already processing).
- */
 async function processQueue(): Promise<void> {
   if (isProcessing) return;
   if (queue.length === 0) return;
@@ -82,36 +84,31 @@ async function processQueue(): Promise<void> {
 
 // ─── Pipeline ─────────────────────────────────────────────────────────
 
-/**
- * Run the full book generation pipeline for a given book ID.
- * Supports resuming from where a previous run left off (after a failure).
- */
 async function runBookPipeline(bookId: string): Promise<void> {
   console.log(`[Pipeline] Starting book generation: ${bookId}`);
 
-  const book = await db.book.findUnique({
-    where: { id: bookId },
-    include: { chapters: { orderBy: { chapterNumber: "asc" } } },
-  });
+  const book = await db.book.findUnique({ where: { id: bookId } });
   if (!book) {
     console.error(`[Pipeline] Book not found: ${bookId}`);
     return;
   }
 
-  try {
-    // ── Determine what phase to resume from ────────────────────
+  const tracker = createTokenTracker();
+  const language = (book.language || "en") as LanguageCode;
+  const pdfTemplate = (book.pdfTemplate || "professional") as PdfTemplate;
 
-    // Reset any stale chapter statuses (GENERATING/EDITING from a failed run → PENDING)
+  try {
+    // ── Reset stale chapter statuses ────────────────────────
     await db.chapter.updateMany({
       where: { bookId, status: { in: ["GENERATING", "EDITING"] } },
       data: { status: "PENDING" },
     });
 
-    // Re-fetch chapters after reset
     const existingChapters = await db.chapter.findMany({
       where: { bookId },
       orderBy: { chapterNumber: "asc" },
     });
+
     const hasPlan = !!book.tocJson && !!book.title;
     const doneChapterNums = existingChapters
       .filter((c) => c.status === "DONE" && c.markdown)
@@ -120,25 +117,25 @@ async function runBookPipeline(bookId: string): Promise<void> {
       existingChapters.length > 0 &&
       existingChapters.every((c) => c.status === "DONE");
 
-    console.log(`[Pipeline] hasPlan=${hasPlan}, title="${book.title}", tocJson=${book.tocJson ? "exists" : "null"}, doneChapters=[${doneChapterNums.join(",")}], totalChapters=${existingChapters.length}`);
+    console.log(`[Pipeline] hasPlan=${hasPlan}, doneChapters=[${doneChapterNums.join(",")}], language=${language}, pdfTemplate=${pdfTemplate}`);
 
     let plan: { title: string; subtitle: string; toc: ChapterOutline[] };
 
+    // ── Phase 1: Planning ──────────────────────────────────
     if (hasPlan) {
-      // Resume: plan already exists
       plan = {
         title: book.title!,
         subtitle: book.subtitle ?? "",
         toc: JSON.parse(book.tocJson!),
       };
-      console.log(`[Pipeline] Resuming with existing plan: "${plan.title}" (${doneChapterNums.length}/${plan.toc.length} chapters done)`);
+      console.log(`[Pipeline] Resuming with existing plan: "${plan.title}"`);
     } else {
-      // ── Phase 1: Planning ──────────────────────────────────
       await updatePhases(bookId, { planning: true, writing: false, exporting: false });
       await updateStatus(bookId, "PLANNING");
 
       plan = await planBook(
-        `${book.prompt}\n\nTarget audience: ${book.audience}\nTone: ${book.tone}\nDesired length: ${book.lengthHint}`
+        `${book.prompt}\n\nTarget audience: ${book.audience}\nTone: ${book.tone}\nDesired length: ${book.lengthHint}`,
+        { language }
       );
 
       await db.book.update({
@@ -147,13 +144,13 @@ async function runBookPipeline(bookId: string): Promise<void> {
           title: plan.title,
           subtitle: plan.subtitle,
           tocJson: JSON.stringify(plan.toc),
+          tokenUsageJson: tracker.toJSON(),
         },
       });
 
-      // Create chapter records in PENDING state
+      // Create chapter records
       for (let i = 0; i < plan.toc.length; i++) {
         const ch = plan.toc[i];
-        // Only create if doesn't already exist (idempotent)
         const exists = existingChapters.some((ec) => ec.chapterNumber === i + 1);
         if (!exists) {
           await db.chapter.create({
@@ -168,11 +165,25 @@ async function runBookPipeline(bookId: string): Promise<void> {
         }
       }
 
+      // T19: Auto-generate metadata
+      try {
+        const metadata = await generateBookMetadata(
+          plan.title, plan.subtitle, JSON.stringify(plan.toc), book.prompt, language
+        );
+        await db.book.update({
+          where: { id: bookId },
+          data: { metadataJson: JSON.stringify(metadata) },
+        });
+        await delay(INTER_CALL_DELAY);
+      } catch (err) {
+        console.warn("[Pipeline] Metadata generation failed (non-critical):", err);
+      }
+
       console.log(`[Pipeline] Plan complete: "${plan.title}" with ${plan.toc.length} chapters`);
       await delay(INTER_CALL_DELAY);
     }
 
-    // ── Phase 2: Writing (skip done chapters) ─────────────────
+    // ── Phase 2: Writing ───────────────────────────────────
     if (!allChaptersDone) {
       await updatePhases(bookId, { planning: true, writing: true, exporting: false });
       await updateStatus(bookId, "WRITING");
@@ -182,6 +193,7 @@ async function runBookPipeline(bookId: string): Promise<void> {
         subtitle: plan.subtitle,
         audience: book.audience,
         tone: book.tone,
+        language,
       };
 
       // Build summaries from already-done chapters
@@ -200,13 +212,11 @@ async function runBookPipeline(bookId: string): Promise<void> {
         const chapterOutline = plan.toc[i];
         const chapterNum = i + 1;
 
-        // Skip already-done chapters
         if (doneChapterNums.includes(chapterNum)) {
           console.log(`[Pipeline] Skipping chapter ${chapterNum} (already done)`);
           continue;
         }
 
-        // Reset any stale status (GENERATING/EDITING from failed run)
         await db.chapter.updateMany({
           where: { bookId, chapterNumber: chapterNum },
           data: { status: "GENERATING" },
@@ -215,13 +225,8 @@ async function runBookPipeline(bookId: string): Promise<void> {
         console.log(`[Pipeline] Generating chapter ${chapterNum}/${plan.toc.length}: "${chapterOutline.chapterTitle}"`);
 
         // Writer pass
-        const draft = await generateChapterDraft(
-          context,
-          chapterOutline,
-          chapterNum,
-          chapterSummaries
-        );
-
+        const draft = await generateChapterDraft(context, chapterOutline, chapterNum, chapterSummaries);
+        tracker.recordEstimated("writing", JSON.stringify(chapterOutline), draft);
         await delay(INTER_CALL_DELAY);
 
         // Editor pass
@@ -230,13 +235,8 @@ async function runBookPipeline(bookId: string): Promise<void> {
           data: { status: "EDITING" },
         });
 
-        const edited = await editChapterDraft(
-          context,
-          chapterOutline,
-          chapterNum,
-          draft
-        );
-
+        const edited = await editChapterDraft(context, chapterOutline, chapterNum, draft);
+        tracker.recordEstimated("editing", draft, edited);
         await delay(INTER_CALL_DELAY);
 
         // Save the edited markdown
@@ -253,18 +253,22 @@ async function runBookPipeline(bookId: string): Promise<void> {
         // Generate summary for context of next chapters
         const summary = await summarizeChapter(chapterOutline.chapterTitle, edited);
         chapterSummaries.push(summary);
-
         await delay(INTER_CALL_DELAY);
+
+        // Save token usage periodically
+        await db.book.update({
+          where: { id: bookId },
+          data: { tokenUsageJson: tracker.toJSON() },
+        });
 
         console.log(`[Pipeline] Chapter ${chapterNum} complete`);
       }
     }
 
-    // ── Phase 3: Exporting ─────────────────────────────────────
+    // ── Phase 3: Exporting ─────────────────────────────────
     await updatePhases(bookId, { planning: true, writing: true, exporting: true });
     await updateStatus(bookId, "EXPORTING");
 
-    // Fetch all chapters with content
     const allChapters = await db.chapter.findMany({
       where: { bookId },
       orderBy: { chapterNumber: "asc" },
@@ -280,33 +284,78 @@ async function runBookPipeline(bookId: string): Promise<void> {
 
     const exportDir = join(process.cwd(), "download", bookId);
 
-    // Generate EPUB
+    // Parse metadata for enhanced EPUB export
+    let epubMetadata: EpubMetadata | undefined;
+    if (book.metadataJson) {
+      try {
+        const meta = JSON.parse(book.metadataJson);
+        epubMetadata = {
+          keywords: meta.keywords,
+          description: meta.abstract,
+          subject: meta.subject,
+          language: meta.language || language,
+          date: new Date().toISOString().split("T")[0],
+        };
+      } catch {
+        // Non-critical
+      }
+    }
+
+    // T23: Generate book cover
+    let coverPath: string | undefined;
+    try {
+      coverPath = await generateBookCover(plan.title, plan.subtitle, exportDir);
+      await db.book.update({ where: { id: bookId }, data: { coverImagePath: coverPath } });
+    } catch (err) {
+      console.warn("[Pipeline] Cover generation failed (non-critical):", err);
+    }
+
+    // Generate EPUB (with metadata + cover)
     console.log("[Pipeline] Exporting EPUB...");
     const epubPath = await exportToEpub({
       title: plan.title,
       subtitle: plan.subtitle,
       chapters: exportChapters,
       outputDir: exportDir,
+      coverImagePath: coverPath,
+      metadata: epubMetadata,
     });
 
-    // Generate PDF
+    // Generate PDF (with template)
     console.log("[Pipeline] Exporting PDF...");
     const pdfPath = await exportToPdf({
       title: plan.title,
       subtitle: plan.subtitle,
       chapters: exportChapters,
       outputDir: exportDir,
+      template: pdfTemplate,
     });
 
-    // Save file paths to DB
+    // T21: Generate MOBI (if Calibre is available)
+    let mobiPath: string | undefined;
+    try {
+      const calibreAvailable = await isCalibreAvailable();
+      if (calibreAvailable) {
+        console.log("[Pipeline] Exporting MOBI...");
+        mobiPath = await exportToMobi(epubPath, exportDir);
+      } else {
+        console.log("[Pipeline] Calibre not available, skipping MOBI export");
+      }
+    } catch (err) {
+      console.warn("[Pipeline] MOBI export failed (non-critical):", err);
+    }
+
+    // Save all paths and mark as done
     await db.book.update({
       where: { id: bookId },
       data: {
         epubPath,
         pdfPath,
+        mobiPath,
+        tokenUsageJson: tracker.toJSON(),
         status: "DONE",
         completedAt: new Date(),
-        errorMessage: null, // Clear any previous error
+        errorMessage: null,
       },
     });
 
@@ -320,6 +369,7 @@ async function runBookPipeline(bookId: string): Promise<void> {
       data: {
         status: "FAILED",
         errorMessage: errorMessage.slice(0, 1000),
+        tokenUsageJson: tracker.toJSON(),
       },
     });
   }

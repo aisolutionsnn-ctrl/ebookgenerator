@@ -127,9 +127,10 @@ export async function editChapterDraft(
   draft: string,
   options?: { signal?: AbortSignal }
 ): Promise<string> {
+  const languageInstruction = getLanguageInstruction(context.language ?? "en");
   const systemPrompt = EDITOR_SYSTEM_PROMPT
     .replace("{tone}", context.tone)
-    .replace("{audience}", context.audience);
+    .replace("{audience}", context.audience) + languageInstruction;
 
   const subTopicsList = chapter.subTopics
     .map((st, i) => `${i + 1}. ${st}`)

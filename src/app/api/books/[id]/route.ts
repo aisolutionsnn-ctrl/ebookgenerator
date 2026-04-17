@@ -1,12 +1,16 @@
 /**
  * GET /api/books/:id
  *
- * Retrieve a book's full status, progress, and chapter list.
- * Used by the frontend for polling.
+ * Retrieve a book's full status, progress, chapter list, and metadata.
  */
 
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
+
+function safeParseJson(str: string | null): unknown {
+  if (!str) return null;
+  try { return JSON.parse(str); } catch { return null; }
+}
 
 export async function GET(
   _request: NextRequest,
@@ -18,9 +22,7 @@ export async function GET(
     const book = await db.book.findUnique({
       where: { id },
       include: {
-        chapters: {
-          orderBy: { chapterNumber: "asc" },
-        },
+        chapters: { orderBy: { chapterNumber: "asc" } },
       },
     });
 
@@ -28,24 +30,10 @@ export async function GET(
       return NextResponse.json({ error: "Book not found." }, { status: 404 });
     }
 
-    // Parse JSON fields
-    let toc = null;
-    if (book.tocJson) {
-      try {
-        toc = JSON.parse(book.tocJson);
-      } catch {
-        toc = null;
-      }
-    }
-
-    let phases = { planning: false, writing: false, exporting: false };
-    if (book.phasesJson) {
-      try {
-        phases = JSON.parse(book.phasesJson);
-      } catch {
-        // Keep default
-      }
-    }
+    const toc = safeParseJson(book.tocJson);
+    const phases = safeParseJson(book.phasesJson) ?? { planning: false, writing: false, exporting: false };
+    const metadata = safeParseJson(book.metadataJson);
+    const tokenUsage = safeParseJson(book.tokenUsageJson);
 
     return NextResponse.json({
       id: book.id,
@@ -53,14 +41,20 @@ export async function GET(
       audience: book.audience,
       tone: book.tone,
       lengthHint: book.lengthHint,
+      language: book.language,
+      pdfTemplate: book.pdfTemplate,
       status: book.status,
       title: book.title,
       subtitle: book.subtitle,
       toc,
       phases,
+      metadata,
+      tokenUsage,
       errorMessage: book.errorMessage,
       epubPath: book.epubPath,
       pdfPath: book.pdfPath,
+      mobiPath: book.mobiPath,
+      coverImagePath: book.coverImagePath,
       createdAt: book.createdAt,
       completedAt: book.completedAt,
       chapters: book.chapters.map((ch) => ({

@@ -1,23 +1,20 @@
 /**
- * POST /api/books
- *
- * Create a new book generation job.
- * Validates input, creates DB record, and enqueues the job.
+ * POST /api/books — Create a new book generation job
+ * GET /api/books — List all books
  */
 
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { enqueueBookJob } from "@/lib/jobQueue";
+import { isValidLanguage } from "@/lib/i18n";
+import { PDF_TEMPLATES, type PdfTemplate } from "@/lib/pdfTemplates";
 
 const MAX_PROMPT_LENGTH = 2000;
-const MAX_AUDIENCE_LENGTH = 200;
-const MAX_TONE_LENGTH = 200;
-const MAX_LENGTH_HINT_LENGTH = 100;
 
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { prompt, audience, tone, lengthHint } = body;
+    const { prompt, audience, tone, lengthHint, language, pdfTemplate } = body;
 
     // Validate prompt (required)
     if (!prompt || typeof prompt !== "string" || prompt.trim().length < 10) {
@@ -36,16 +33,24 @@ export async function POST(request: NextRequest) {
     // Validate optional fields with defaults
     const safeAudience =
       typeof audience === "string" && audience.trim()
-        ? audience.trim().slice(0, MAX_AUDIENCE_LENGTH)
+        ? audience.trim().slice(0, 200)
         : "General readers";
     const safeTone =
       typeof tone === "string" && tone.trim()
-        ? tone.trim().slice(0, MAX_TONE_LENGTH)
+        ? tone.trim().slice(0, 200)
         : "Informative and engaging";
     const safeLengthHint =
       typeof lengthHint === "string" && lengthHint.trim()
-        ? lengthHint.trim().slice(0, MAX_LENGTH_HINT_LENGTH)
+        ? lengthHint.trim().slice(0, 100)
         : "Medium (8-12 chapters)";
+
+    // T16: Validate language
+    const safeLanguage = isValidLanguage(language) ? language : "en";
+
+    // T22: Validate PDF template
+    const validTemplates = PDF_TEMPLATES.map((t) => t.id);
+    const safePdfTemplate: PdfTemplate =
+      validTemplates.includes(pdfTemplate) ? pdfTemplate : "professional";
 
     // Create book record
     const book = await db.book.create({
@@ -54,6 +59,8 @@ export async function POST(request: NextRequest) {
         audience: safeAudience,
         tone: safeTone,
         lengthHint: safeLengthHint,
+        language: safeLanguage,
+        pdfTemplate: safePdfTemplate,
         status: "PLANNING",
         phasesJson: JSON.stringify({
           planning: false,
@@ -81,11 +88,6 @@ export async function POST(request: NextRequest) {
   }
 }
 
-/**
- * GET /api/books
- *
- * List all books (simple listing for the UI).
- */
 export async function GET() {
   try {
     const books = await db.book.findMany({
@@ -96,6 +98,12 @@ export async function GET() {
         subtitle: true,
         status: true,
         prompt: true,
+        language: true,
+        pdfTemplate: true,
+        coverImagePath: true,
+        epubPath: true,
+        pdfPath: true,
+        mobiPath: true,
         createdAt: true,
         completedAt: true,
       },
