@@ -6,6 +6,7 @@ import {
   Clock, AlertCircle, Sparkles, ChevronDown, ChevronUp, RotateCcw,
   Sun, Moon, History, BarChart3, Edit3, X, Languages, Palette,
   LogIn, LogOut, User, Mail, Lock, UserPlus,
+  Cloud, CloudUpload, CloudDownload, Database, Copy, CheckCircle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -59,7 +60,7 @@ interface BookListItem {
   createdAt: string; completedAt: string | null;
 }
 
-type ViewMode = "landing" | "generate" | "progress" | "history" | "dashboard" | "auth";
+type ViewMode = "landing" | "generate" | "progress" | "history" | "dashboard" | "auth" | "cloud";
 
 interface AuthUser {
   id: string;
@@ -297,6 +298,9 @@ export default function Home() {
             <Button variant={view === "dashboard" ? "secondary" : "ghost"} size="sm" onClick={() => setView("dashboard")}>
               <BarChart3 className="w-4 h-4 mr-1" /> Stats
             </Button>
+            <Button variant={view === "cloud" ? "secondary" : "ghost"} size="sm" onClick={() => setView("cloud")}>
+              <Cloud className="w-4 h-4 mr-1" /> Cloud
+            </Button>
           </nav>
 
           <div className="ml-auto flex items-center gap-2">
@@ -353,6 +357,7 @@ export default function Home() {
         )}
         {view === "history" && <HistoryView books={books} onOpen={openBook} onRefresh={fetchBooks} />}
         {view === "dashboard" && <DashboardView books={books} />}
+        {view === "cloud" && <CloudView />}
         {view === "auth" && (
           <AuthView
             onLogin={handleLogin}
@@ -940,6 +945,285 @@ function AuthView({
 }
 
 // ─── Shared Components ────────────────────────────────────────────────
+
+// ─── Cloud View (Supabase Sync) ────────────────────────────────────────
+
+function CloudView() {
+  const [status, setStatus] = useState<{
+    configured: boolean;
+    connected: boolean;
+    bookCount: number;
+    tableExists: boolean;
+    storageBucketExists: boolean;
+    setupSQL?: string;
+  } | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [pushing, setPushing] = useState(false);
+  const [pulling, setPulling] = useState(false);
+  const [result, setResult] = useState<{ type: "push" | "pull"; data: Record<string, unknown> } | null>(null);
+  const [showSQL, setShowSQL] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  const fetchStatus = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await fetch("/api/sync/status");
+      if (res.ok) {
+        const data = await res.json();
+        setStatus(data);
+      }
+    } catch { /* ignore */ } finally { setLoading(false); }
+  }, []);
+
+  useEffect(() => { fetchStatus(); }, [fetchStatus]);
+
+  const handlePush = async () => {
+    setPushing(true);
+    setResult(null);
+    try {
+      const res = await fetch("/api/sync/push", { method: "POST" });
+      const data = await res.json();
+      setResult({ type: "push", data });
+    } catch (err) {
+      setResult({ type: "push", data: { error: err instanceof Error ? err.message : "Push failed" } });
+    } finally { setPushing(false); }
+  };
+
+  const handlePull = async () => {
+    if (!confirm("This will overwrite local data with cloud data. Are you sure?")) return;
+    setPulling(true);
+    setResult(null);
+    try {
+      const res = await fetch("/api/sync/pull", { method: "POST" });
+      const data = await res.json();
+      setResult({ type: "pull", data });
+    } catch (err) {
+      setResult({ type: "pull", data: { error: err instanceof Error ? err.message : "Pull failed" } });
+    } finally { setPulling(false); }
+  };
+
+  const handleCopySQL = async () => {
+    if (!status?.setupSQL) return;
+    await navigator.clipboard.writeText(status.setupSQL);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-20">
+        <Loader2 className="w-8 h-8 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
+
+  if (!status?.configured) {
+    return (
+      <div className="max-w-2xl mx-auto space-y-6">
+        <h2 className="text-2xl font-bold flex items-center gap-2"><Cloud className="w-6 h-6" /> Cloud Sync</h2>
+        <Card>
+          <CardContent className="pt-6 text-center space-y-4">
+            <AlertCircle className="w-12 h-12 mx-auto text-muted-foreground" />
+            <h3 className="text-lg font-semibold">Supabase Not Configured</h3>
+            <p className="text-muted-foreground">
+              Add <code className="bg-muted px-1.5 py-0.5 rounded text-sm">SUPABASE_URL</code> and
+              <code className="bg-muted px-1.5 py-0.5 rounded text-sm ml-1">SUPABASE_SERVICE_KEY</code> to your
+              <code className="bg-muted px-1.5 py-0.5 rounded text-sm ml-1">.env</code> file to enable cloud sync.
+            </p>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  return (
+    <div className="max-w-4xl mx-auto space-y-6">
+      <div className="flex items-center justify-between">
+        <h2 className="text-2xl font-bold flex items-center gap-2"><Cloud className="w-6 h-6" /> Cloud Sync</h2>
+        <Button variant="outline" size="sm" onClick={fetchStatus}>
+          <RotateCcw className="w-4 h-4 mr-1" /> Refresh
+        </Button>
+      </div>
+
+      {/* Connection Status */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <Card>
+          <CardContent className="pt-5 flex items-center gap-4">
+            <div className={`flex items-center justify-center w-10 h-10 rounded-lg ${status.connected ? "bg-green-500/10" : "bg-red-500/10"}`}>
+              {status.connected ? <CheckCircle2 className="w-5 h-5 text-green-600" /> : <AlertCircle className="w-5 h-5 text-red-500" />}
+            </div>
+            <div>
+              <p className="text-sm text-muted-foreground">Connection</p>
+              <p className="font-semibold">{status.connected ? "Connected" : "Disconnected"}</p>
+            </div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="pt-5 flex items-center gap-4">
+            <div className="flex items-center justify-center w-10 h-10 rounded-lg bg-primary/10">
+              <Database className="w-5 h-5 text-primary" />
+            </div>
+            <div>
+              <p className="text-sm text-muted-foreground">Cloud Books</p>
+              <p className="font-semibold">{status.bookCount}</p>
+            </div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="pt-5 flex items-center gap-4">
+            <div className={`flex items-center justify-center w-10 h-10 rounded-lg ${status.storageBucketExists ? "bg-green-500/10" : "bg-yellow-500/10"}`}>
+              {status.storageBucketExists ? <CheckCircle className="w-5 h-5 text-green-600" /> : <AlertCircle className="w-5 h-5 text-yellow-600" />}
+            </div>
+            <div>
+              <p className="text-sm text-muted-foreground">Storage</p>
+              <p className="font-semibold">{status.storageBucketExists ? "Ready" : "Not Set Up"}</p>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Setup Required */}
+      {!status.tableExists && (
+        <Card className="border-yellow-500/50 bg-yellow-500/5">
+          <CardHeader className="pb-3">
+            <CardTitle className="text-lg flex items-center gap-2 text-yellow-700 dark:text-yellow-400">
+              <AlertCircle className="w-5 h-5" /> Setup Required
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <p className="text-sm text-muted-foreground">
+              Supabase tables don&apos;t exist yet. You need to run the SQL setup script in your Supabase Dashboard.
+            </p>
+            <ol className="text-sm space-y-2 list-decimal list-inside text-muted-foreground">
+              <li>Go to <strong>Supabase Dashboard</strong> &rarr; <strong>SQL Editor</strong></li>
+              <li>Click <strong>New Query</strong></li>
+              <li>Copy the SQL below and paste it</li>
+              <li>Click <strong>Run</strong></li>
+            </ol>
+            <Button variant="outline" size="sm" onClick={() => setShowSQL(!showSQL)}>
+              {showSQL ? "Hide" : "Show"} SQL Setup Script
+            </Button>
+            {showSQL && status.setupSQL && (
+              <div className="relative">
+                <pre className="bg-muted p-4 rounded-lg text-xs overflow-auto max-h-96 border">
+                  {status.setupSQL}
+                </pre>
+                <Button variant="ghost" size="sm" className="absolute top-2 right-2" onClick={handleCopySQL}>
+                  {copied ? <><CheckCircle className="w-3.5 h-3.5 mr-1" /> Copied!</> : <><Copy className="w-3.5 h-3.5 mr-1" /> Copy</>}
+                </Button>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Sync Actions */}
+      {status.tableExists && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-lg flex items-center gap-2">
+                <CloudUpload className="w-5 h-5 text-primary" /> Push to Cloud
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <p className="text-sm text-muted-foreground">
+                Upload all local books, chapters, and files (PDF, EPUB, MOBI, covers) to Supabase cloud storage.
+              </p>
+              <Button onClick={handlePush} disabled={pushing} className="w-full">
+                {pushing ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Pushing...</> : <><CloudUpload className="w-4 h-4 mr-2" /> Push All to Cloud</>}
+              </Button>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-lg flex items-center gap-2">
+                <CloudDownload className="w-5 h-5 text-primary" /> Restore from Cloud
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <p className="text-sm text-muted-foreground">
+                Download all books and chapters from Supabase cloud to your local database. Overwrites local data.
+              </p>
+              <Button onClick={handlePull} disabled={pulling} variant="outline" className="w-full">
+                {pulling ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Restoring...</> : <><CloudDownload className="w-4 h-4 mr-2" /> Pull from Cloud</>}
+              </Button>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
+      {/* Result */}
+      {result && (
+        <Card className={result.data.error ? "border-destructive/50" : "border-green-500/50"}>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-lg flex items-center gap-2">
+              {result.data.error ? <AlertCircle className="w-5 h-5 text-destructive" /> : <CheckCircle2 className="w-5 h-5 text-green-600" />}
+              {result.type === "push" ? "Push Result" : "Restore Result"}
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            {result.data.error ? (
+              <p className="text-sm text-destructive">{String(result.data.error)}</p>
+            ) : (
+              <div className="space-y-2 text-sm">
+                {result.type === "push" ? (
+                  <>
+                    <p><strong>Books synced:</strong> {String(result.data.booksSynced ?? 0)}</p>
+                    <p><strong>Chapters synced:</strong> {String(result.data.chaptersSynced ?? 0)}</p>
+                    <p><strong>Files uploaded:</strong> {String(result.data.filesSynced ?? 0)}</p>
+                    {Array.isArray(result.data.errors) && result.data.errors.length > 0 && (
+                      <div className="mt-2">
+                        <p className="font-medium text-yellow-600">Warnings:</p>
+                        <ul className="list-disc list-inside text-muted-foreground">
+                          {result.data.errors.map((e: unknown, i: number) => <li key={i}>{String(e)}</li>)}
+                        </ul>
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    <p><strong>Books restored:</strong> {String(result.data.booksRestored ?? 0)}</p>
+                    <p><strong>Chapters restored:</strong> {String(result.data.chaptersRestored ?? 0)}</p>
+                    {Array.isArray(result.data.errors) && result.data.errors.length > 0 && (
+                      <div className="mt-2">
+                        <p className="font-medium text-yellow-600">Warnings:</p>
+                        <ul className="list-disc list-inside text-muted-foreground">
+                          {result.data.errors.map((e: unknown, i: number) => <li key={i}>{String(e)}</li>)}
+                        </ul>
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Auto-sync info */}
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-lg flex items-center gap-2">
+            <Sparkles className="w-5 h-5 text-primary" /> Auto-Sync
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <p className="text-sm text-muted-foreground">
+            Auto-sync is <Badge variant="default" className="ml-1">Enabled</Badge>
+          </p>
+          <p className="text-sm text-muted-foreground mt-2">
+            Book data (title, chapters, status) is automatically synced to Supabase on every change:
+            when a book is created, when planning completes, when each chapter finishes writing,
+            and when the final export is done. File uploads (PDF, EPUB, MOBI, cover images) are
+            synced when a book generation completes.
+          </p>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
 
 function ChapterStatusIcon({ status }: { status: string }) {
   switch (status) {

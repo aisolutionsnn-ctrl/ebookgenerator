@@ -35,6 +35,7 @@ import { createTokenTracker, TokenTracker } from "./tokenTracker";
 import { type LanguageCode } from "./i18n";
 import { type PdfTemplate } from "./pdfTemplates";
 import { join } from "path";
+import { syncBookToCloud, syncChapterToCloud, syncBookFilesToCloud, type SyncBookData, type SyncChapterData } from "./supabaseSync";
 
 // ─── Config ───────────────────────────────────────────────────────────
 
@@ -180,6 +181,20 @@ async function runBookPipeline(bookId: string): Promise<void> {
       }
 
       console.log(`[Pipeline] Plan complete: "${plan.title}" with ${plan.toc.length} chapters`);
+
+      // Auto-sync: push updated book + new chapters to Supabase
+      const bookAfterPlan = await db.book.findUnique({ where: { id: bookId } });
+      if (bookAfterPlan) autoSyncBook(buildSyncBook(bookAfterPlan));
+      const newChapters = await db.chapter.findMany({ where: { bookId } });
+      for (const ch of newChapters) {
+        autoSyncChapter({
+          id: ch.id, bookId: ch.bookId, chapterNumber: ch.chapterNumber,
+          title: ch.title, outline: ch.outline, markdown: ch.markdown,
+          status: ch.status, generatedAt: ch.generatedAt?.toISOString() ?? null,
+          editedAt: ch.editedAt?.toISOString() ?? null,
+        });
+      }
+
       await delay(INTER_CALL_DELAY);
     }
 
@@ -249,6 +264,19 @@ async function runBookPipeline(bookId: string): Promise<void> {
             editedAt: new Date(),
           },
         });
+
+        // Auto-sync: push updated chapter to Supabase
+        const updatedChapter = await db.chapter.findFirst({ where: { bookId, chapterNumber: chapterNum } });
+        if (updatedChapter) {
+          autoSyncChapter({
+            id: updatedChapter.id, bookId: updatedChapter.bookId,
+            chapterNumber: updatedChapter.chapterNumber, title: updatedChapter.title,
+            outline: updatedChapter.outline, markdown: updatedChapter.markdown,
+            status: updatedChapter.status,
+            generatedAt: updatedChapter.generatedAt?.toISOString() ?? null,
+            editedAt: updatedChapter.editedAt?.toISOString() ?? null,
+          });
+        }
 
         // Generate summary for context of next chapters
         const summary = await summarizeChapter(chapterOutline.chapterTitle, edited);
@@ -359,6 +387,11 @@ async function runBookPipeline(bookId: string): Promise<void> {
       },
     });
 
+    // Auto-sync: push final book state + files to Supabase
+    const finalBook = await db.book.findUnique({ where: { id: bookId } });
+    if (finalBook) autoSyncBook(buildSyncBook(finalBook));
+    autoSyncFiles({ id: bookId, pdfPath, epubPath, mobiPath: mobiPath ?? null, coverImagePath: coverPath ?? null });
+
     console.log(`[Pipeline] Book generation complete: ${bookId}`);
   } catch (err: unknown) {
     const errorMessage = err instanceof Error ? err.message : String(err);
@@ -372,6 +405,10 @@ async function runBookPipeline(bookId: string): Promise<void> {
         tokenUsageJson: tracker.toJSON(),
       },
     });
+
+    // Auto-sync: push failed state to Supabase
+    const failedBook = await db.book.findUnique({ where: { id: bookId } });
+    if (failedBook) autoSyncBook(buildSyncBook(failedBook));
   }
 }
 
@@ -389,6 +426,80 @@ async function updateStatus(bookId: string, status: string): Promise<void> {
     where: { id: bookId },
     data: { status },
   });
+}
+
+// ─── Supabase Auto-Sync ───────────────────────────────────────────────
+
+/** Helper to build SyncBookData from a Prisma book record */
+function buildSyncBook(book: {
+  id: string;
+  userId: string | null;
+  prompt: string;
+  audience: string;
+  tone: string;
+  lengthHint: string;
+  status: string;
+  title: string | null;
+  subtitle: string | null;
+  tocJson: string | null;
+  phasesJson: string | null;
+  errorMessage: string | null;
+  epubPath: string | null;
+  pdfPath: string | null;
+  tokenUsageJson: string | null;
+  metadataJson: string | null;
+  language: string;
+  mobiPath: string | null;
+  pdfTemplate: string;
+  coverImagePath: string | null;
+  createdAt: Date;
+  completedAt: Date | null;
+}): SyncBookData {
+  return {
+    id: book.id,
+    userId: book.userId,
+    prompt: book.prompt,
+    audience: book.audience,
+    tone: book.tone,
+    lengthHint: book.lengthHint,
+    status: book.status,
+    title: book.title,
+    subtitle: book.subtitle,
+    tocJson: book.tocJson,
+    phasesJson: book.phasesJson,
+    errorMessage: book.errorMessage,
+    epubPath: book.epubPath,
+    pdfPath: book.pdfPath,
+    tokenUsageJson: book.tokenUsageJson,
+    metadataJson: book.metadataJson,
+    language: book.language,
+    mobiPath: book.mobiPath,
+    pdfTemplate: book.pdfTemplate,
+    coverImagePath: book.coverImagePath,
+    createdAt: book.createdAt.toISOString(),
+    completedAt: book.completedAt?.toISOString() ?? null,
+  };
+}
+
+/** Async sync: book data to Supabase (non-blocking) */
+function autoSyncBook(book: SyncBookData): void {
+  syncBookToCloud(book).catch((err) =>
+    console.warn("[AutoSync] Book sync failed:", err?.message || err)
+  );
+}
+
+/** Async sync: chapter data to Supabase (non-blocking) */
+function autoSyncChapter(chapter: SyncChapterData): void {
+  syncChapterToCloud(chapter).catch((err) =>
+    console.warn("[AutoSync] Chapter sync failed:", err?.message || err)
+  );
+}
+
+/** Async sync: upload files to Supabase Storage (non-blocking) */
+function autoSyncFiles(book: { id: string; pdfPath: string | null; epubPath: string | null; mobiPath: string | null; coverImagePath: string | null }): void {
+  syncBookFilesToCloud(book).catch((err) =>
+    console.warn("[AutoSync] File sync failed:", err?.message || err)
+  );
 }
 
 function delay(ms: number): Promise<void> {

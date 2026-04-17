@@ -4,12 +4,15 @@
  * Syncs local SQLite data with Supabase cloud database.
  * - Every write to local DB triggers an async sync to Supabase
  * - Can restore data from Supabase if local DB is lost
- * - Tables are auto-created on first sync if they don't exist
+ * - File storage in Supabase Storage bucket (PDF, EPUB, MOBI, covers)
  *
  * All communication goes through HTTPS REST API (port 443).
  */
 
 import { getSupabase, isSupabaseConfigured } from "./supabaseClient";
+import { readFile, stat, mkdir } from "fs/promises";
+import { existsSync } from "fs";
+import { join, dirname } from "path";
 
 // ─── Auto-create tables if they don't exist ───────────────────────────
 
@@ -164,7 +167,7 @@ function rowToChapter(row: Record<string, unknown>): SyncChapterData {
   };
 }
 
-// ─── Public API ───────────────────────────────────────────────────────
+// ─── Public API: Data Sync ────────────────────────────────────────────
 
 /** Sync a single book to Supabase (upsert) */
 export async function syncBookToCloud(book: SyncBookData): Promise<boolean> {
@@ -263,10 +266,18 @@ export async function fetchBookFromCloud(bookId: string): Promise<{ book: SyncBo
   };
 }
 
-/** Delete a book from Supabase */
+/** Delete a book and its files from Supabase */
 export async function deleteBookFromCloud(bookId: string): Promise<boolean> {
   if (!isSupabaseConfigured()) return false;
   const sb = getSupabase()!;
+
+  // Delete files from storage first
+  await deleteBookFilesFromCloud(bookId);
+
+  // Delete book_files records
+  await sb.from("book_files").delete().eq("book_id", bookId);
+
+  // Delete book (chapters cascade)
   const { error } = await sb.from("books").delete().eq("id", bookId);
   if (error) {
     console.error("[Supabase] deleteBookFromCloud error:", error.message);
@@ -281,18 +292,28 @@ export async function getSupabaseStatus(): Promise<{
   connected: boolean;
   bookCount: number;
   tableExists: boolean;
+  storageBucketExists: boolean;
 }> {
   const configured = isSupabaseConfigured();
   if (!configured) {
-    return { configured: false, connected: false, bookCount: 0, tableExists: false };
+    return { configured: false, connected: false, bookCount: 0, tableExists: false, storageBucketExists: false };
   }
 
   const sb = getSupabase()!;
   const { data, error } = await sb.from("books").select("id", { count: "exact", head: true });
 
+  // Check storage bucket
+  let storageBucketExists = false;
+  try {
+    const { data: buckets } = await sb.storage.listBuckets();
+    storageBucketExists = buckets?.some((b) => b.name === "book-exports") ?? false;
+  } catch {
+    // Storage might not be accessible
+  }
+
   if (error) {
     const tableExists = !error.message.includes("Could not find");
-    return { configured: true, connected: false, bookCount: 0, tableExists };
+    return { configured: true, connected: false, bookCount: 0, tableExists, storageBucketExists };
   }
 
   return {
@@ -300,16 +321,466 @@ export async function getSupabaseStatus(): Promise<{
     connected: true,
     bookCount: data?.length ?? 0,
     tableExists: true,
+    storageBucketExists,
   };
 }
 
-/** Get the SQL setup script for first-time table creation */
+// ─── File Storage API ────────────────────────────────────────────────
+
+const STORAGE_BUCKET = "book-exports";
+
+/** Upload a file to Supabase Storage */
+export async function uploadFileToCloud(
+  bookId: string,
+  fileType: "pdf" | "epub" | "mobi" | "cover",
+  localFilePath: string
+): Promise<string | null> {
+  if (!isSupabaseConfigured()) return null;
+  const sb = getSupabase()!;
+
+  try {
+    // Read the file
+    if (!existsSync(localFilePath)) {
+      console.warn(`[Supabase] File not found for upload: ${localFilePath}`);
+      return null;
+    }
+
+    const fileBuffer = await readFile(localFilePath);
+    const fileStat = await stat(localFilePath);
+
+    // Determine content type
+    const contentTypes: Record<string, string> = {
+      pdf: "application/pdf",
+      epub: "application/epub+zip",
+      mobi: "application/x-mobipocket-ebook",
+      cover: "image/png",
+    };
+
+    // Build storage path: {bookId}/{fileType}.{ext}
+    const extensions: Record<string, string> = {
+      pdf: "pdf",
+      epub: "epub",
+      mobi: "mobi",
+      cover: "png",
+    };
+    const storagePath = `${bookId}/${fileType}.${extensions[fileType]}`;
+
+    // Upload to Supabase Storage
+    const { error: uploadError } = await sb.storage
+      .from(STORAGE_BUCKET)
+      .upload(storagePath, fileBuffer, {
+        contentType: contentTypes[fileType],
+        upsert: true,
+      });
+
+    if (uploadError) {
+      console.error("[Supabase] File upload error:", uploadError.message);
+      return null;
+    }
+
+    // Record in book_files table
+    const { error: dbError } = await sb
+      .from("book_files")
+      .upsert(
+        {
+          book_id: bookId,
+          file_type: fileType,
+          storage_path: storagePath,
+          file_size: fileStat.size,
+          content_type: contentTypes[fileType],
+        },
+        { onConflict: "book_id,file_type" }
+      );
+
+    if (dbError) {
+      console.warn("[Supabase] book_files record error (non-critical):", dbError.message);
+    }
+
+    console.log(`[Supabase] Uploaded ${fileType} for book ${bookId} (${(fileStat.size / 1024).toFixed(1)} KB)`);
+    return storagePath;
+  } catch (err) {
+    console.error("[Supabase] uploadFileToCloud error:", err);
+    return null;
+  }
+}
+
+/** Get a signed URL for downloading a file from Supabase Storage */
+export async function getFileSignedUrl(
+  bookId: string,
+  fileType: "pdf" | "epub" | "mobi" | "cover"
+): Promise<string | null> {
+  if (!isSupabaseConfigured()) return null;
+  const sb = getSupabase()!;
+
+  try {
+    // Look up the storage path from book_files table
+    const { data: fileRecord, error: dbError } = await sb
+      .from("book_files")
+      .select("storage_path")
+      .eq("book_id", bookId)
+      .eq("file_type", fileType)
+      .single();
+
+    if (dbError || !fileRecord) {
+      // Fallback: try standard path
+      const extensions: Record<string, string> = { pdf: "pdf", epub: "epub", mobi: "mobi", cover: "png" };
+      const fallbackPath = `${bookId}/${fileType}.${extensions[fileType]}`;
+      const { data, error } = await sb.storage
+        .from(STORAGE_BUCKET)
+        .createSignedUrl(fallbackPath, 3600); // 1 hour
+
+      if (error || !data) return null;
+      return data.signedUrl;
+    }
+
+    const { data, error } = await sb.storage
+      .from(STORAGE_BUCKET)
+      .createSignedUrl(fileRecord.storage_path, 3600);
+
+    if (error || !data) return null;
+    return data.signedUrl;
+  } catch (err) {
+    console.error("[Supabase] getFileSignedUrl error:", err);
+    return null;
+  }
+}
+
+/** Download a file from Supabase Storage to local filesystem */
+export async function downloadFileFromCloud(
+  bookId: string,
+  fileType: "pdf" | "epub" | "mobi" | "cover",
+  localDir: string
+): Promise<string | null> {
+  if (!isSupabaseConfigured()) return null;
+  const sb = getSupabase()!;
+
+  try {
+    const extensions: Record<string, string> = { pdf: "pdf", epub: "epub", mobi: "mobi", cover: "png" };
+    const storagePath = `${bookId}/${fileType}.${extensions[fileType]}`;
+
+    const { data, error } = await sb.storage
+      .from(STORAGE_BUCKET)
+      .download(storagePath);
+
+    if (error || !data) {
+      console.error("[Supabase] File download error:", error?.message);
+      return null;
+    }
+
+    // Ensure directory exists
+    if (!existsSync(localDir)) {
+      await mkdir(localDir, { recursive: true });
+    }
+
+    // Write to local filesystem
+    const localPath = join(localDir, `${fileType}.${extensions[fileType]}`);
+    const arrayBuffer = await data.arrayBuffer();
+    const { writeFile } = await import("fs/promises");
+    await writeFile(localPath, Buffer.from(arrayBuffer));
+
+    console.log(`[Supabase] Downloaded ${fileType} for book ${bookId} to ${localPath}`);
+    return localPath;
+  } catch (err) {
+    console.error("[Supabase] downloadFileFromCloud error:", err);
+    return null;
+  }
+}
+
+/** Delete all files for a book from Supabase Storage */
+export async function deleteBookFilesFromCloud(bookId: string): Promise<boolean> {
+  if (!isSupabaseConfigured()) return false;
+  const sb = getSupabase()!;
+
+  try {
+    // List all files in the book's folder
+    const { data: files, error: listError } = await sb.storage
+      .from(STORAGE_BUCKET)
+      .list(bookId);
+
+    if (listError || !files || files.length === 0) {
+      return true; // No files to delete
+    }
+
+    // Delete all files
+    const filePaths = files.map((f) => `${bookId}/${f.name}`);
+    const { error: deleteError } = await sb.storage
+      .from(STORAGE_BUCKET)
+      .remove(filePaths);
+
+    if (deleteError) {
+      console.error("[Supabase] File delete error:", deleteError.message);
+      return false;
+    }
+
+    console.log(`[Supabase] Deleted ${filePaths.length} files for book ${bookId}`);
+    return true;
+  } catch (err) {
+    console.error("[Supabase] deleteBookFilesFromCloud error:", err);
+    return false;
+  }
+}
+
+/** Upload all export files for a completed book to Supabase Storage */
+export async function syncBookFilesToCloud(book: {
+  id: string;
+  pdfPath: string | null;
+  epubPath: string | null;
+  mobiPath: string | null;
+  coverImagePath: string | null;
+}): Promise<{ uploaded: string[]; failed: string[] }> {
+  const uploaded: string[] = [];
+  const failed: string[] = [];
+
+  const fileMap: Array<{ type: "pdf" | "epub" | "mobi" | "cover"; path: string | null }> = [
+    { type: "pdf", path: book.pdfPath },
+    { type: "epub", path: book.epubPath },
+    { type: "mobi", path: book.mobiPath },
+    { type: "cover", path: book.coverImagePath },
+  ];
+
+  for (const { type, path } of fileMap) {
+    if (path && existsSync(path)) {
+      const result = await uploadFileToCloud(book.id, type, path);
+      if (result) {
+        uploaded.push(type);
+      } else {
+        failed.push(type);
+      }
+    }
+  }
+
+  if (uploaded.length > 0) {
+    console.log(`[Supabase] Synced files for book ${book.id}: uploaded=[${uploaded.join(",")}], failed=[${failed.join(",")}]`);
+  }
+
+  return { uploaded, failed };
+}
+
+// ─── Bulk Sync Operations ────────────────────────────────────────────
+
+/** Push all local data to Supabase (full sync) */
+export async function pushAllToCloud(): Promise<{
+  booksSynced: number;
+  chaptersSynced: number;
+  filesSynced: number;
+  errors: string[];
+}> {
+  if (!isSupabaseConfigured()) {
+    return { booksSynced: 0, chaptersSynced: 0, filesSynced: 0, errors: ["Supabase not configured"] };
+  }
+
+  const errors: string[] = [];
+  let booksSynced = 0;
+  let chaptersSynced = 0;
+  let filesSynced = 0;
+
+  try {
+    // Dynamic import to avoid circular dependencies
+    const { db } = await import("./db");
+
+    const books = await db.book.findMany({
+      include: { chapters: { orderBy: { chapterNumber: "asc" } } },
+    });
+
+    for (const book of books) {
+      // Sync book
+      const bookOk = await syncBookToCloud({
+        id: book.id,
+        userId: book.userId,
+        prompt: book.prompt,
+        audience: book.audience,
+        tone: book.tone,
+        lengthHint: book.lengthHint,
+        status: book.status,
+        title: book.title,
+        subtitle: book.subtitle,
+        tocJson: book.tocJson,
+        phasesJson: book.phasesJson,
+        errorMessage: book.errorMessage,
+        epubPath: book.epubPath,
+        pdfPath: book.pdfPath,
+        tokenUsageJson: book.tokenUsageJson,
+        metadataJson: book.metadataJson,
+        language: book.language,
+        mobiPath: book.mobiPath,
+        pdfTemplate: book.pdfTemplate,
+        coverImagePath: book.coverImagePath,
+        createdAt: book.createdAt.toISOString(),
+        completedAt: book.completedAt?.toISOString() ?? null,
+      });
+      if (bookOk) booksSynced++;
+      else errors.push(`Failed to sync book: ${book.id}`);
+
+      // Sync chapters
+      const chapterRows = book.chapters.map((ch) => ({
+        id: ch.id,
+        bookId: ch.bookId,
+        chapterNumber: ch.chapterNumber,
+        title: ch.title,
+        outline: ch.outline,
+        markdown: ch.markdown,
+        status: ch.status,
+        generatedAt: ch.generatedAt?.toISOString() ?? null,
+        editedAt: ch.editedAt?.toISOString() ?? null,
+      }));
+      if (chapterRows.length > 0) {
+        const chOk = await syncChaptersToCloud(chapterRows);
+        if (chOk) chaptersSynced += chapterRows.length;
+        else errors.push(`Failed to sync chapters for book: ${book.id}`);
+      }
+
+      // Sync files (only for completed books)
+      if (book.status === "DONE" && (book.pdfPath || book.epubPath)) {
+        const fileResult = await syncBookFilesToCloud(book);
+        filesSynced += fileResult.uploaded.length;
+        if (fileResult.failed.length > 0) {
+          errors.push(`Some files failed for book ${book.id}: ${fileResult.failed.join(", ")}`);
+        }
+      }
+    }
+  } catch (err) {
+    errors.push(`Push error: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  return { booksSynced, chaptersSynced, filesSynced, errors };
+}
+
+/** Pull all data from Supabase to local DB (restore) */
+export async function pullAllFromCloud(): Promise<{
+  booksRestored: number;
+  chaptersRestored: number;
+  errors: string[];
+}> {
+  if (!isSupabaseConfigured()) {
+    return { booksRestored: 0, chaptersRestored: 0, errors: ["Supabase not configured"] };
+  }
+
+  const errors: string[] = [];
+  let booksRestored = 0;
+  let chaptersRestored = 0;
+
+  try {
+    const { db } = await import("./db");
+
+    const cloudBooks = await fetchBooksFromCloud();
+
+    for (const cloudBook of cloudBooks) {
+      // Check if book already exists locally
+      const existing = await db.book.findUnique({ where: { id: cloudBook.id } });
+
+      if (existing) {
+        // Update existing book (cloud wins if newer)
+        await db.book.update({
+          where: { id: cloudBook.id },
+          data: {
+            userId: cloudBook.userId,
+            status: cloudBook.status,
+            title: cloudBook.title,
+            subtitle: cloudBook.subtitle,
+            tocJson: cloudBook.tocJson,
+            phasesJson: cloudBook.phasesJson,
+            errorMessage: cloudBook.errorMessage,
+            epubPath: cloudBook.epubPath,
+            pdfPath: cloudBook.pdfPath,
+            tokenUsageJson: cloudBook.tokenUsageJson,
+            metadataJson: cloudBook.metadataJson,
+            language: cloudBook.language,
+            mobiPath: cloudBook.mobiPath,
+            pdfTemplate: cloudBook.pdfTemplate,
+            coverImagePath: cloudBook.coverImagePath,
+            completedAt: cloudBook.completedAt ? new Date(cloudBook.completedAt) : null,
+          },
+        });
+      } else {
+        // Create new book
+        await db.book.create({
+          data: {
+            id: cloudBook.id,
+            userId: cloudBook.userId,
+            prompt: cloudBook.prompt,
+            audience: cloudBook.audience,
+            tone: cloudBook.tone,
+            lengthHint: cloudBook.lengthHint,
+            status: cloudBook.status,
+            title: cloudBook.title,
+            subtitle: cloudBook.subtitle,
+            tocJson: cloudBook.tocJson,
+            phasesJson: cloudBook.phasesJson,
+            errorMessage: cloudBook.errorMessage,
+            epubPath: cloudBook.epubPath,
+            pdfPath: cloudBook.pdfPath,
+            tokenUsageJson: cloudBook.tokenUsageJson,
+            metadataJson: cloudBook.metadataJson,
+            language: cloudBook.language,
+            mobiPath: cloudBook.mobiPath,
+            pdfTemplate: cloudBook.pdfTemplate,
+            coverImagePath: cloudBook.coverImagePath,
+            createdAt: new Date(cloudBook.createdAt),
+            completedAt: cloudBook.completedAt ? new Date(cloudBook.completedAt) : null,
+          },
+        });
+      }
+      booksRestored++;
+
+      // Fetch and restore chapters
+      const cloudData = await fetchBookFromCloud(cloudBook.id);
+      if (cloudData) {
+        for (const ch of cloudData.chapters) {
+          const existingCh = await db.chapter.findUnique({ where: { id: ch.id } });
+          if (existingCh) {
+            await db.chapter.update({
+              where: { id: ch.id },
+              data: {
+                title: ch.title,
+                outline: ch.outline,
+                markdown: ch.markdown,
+                status: ch.status,
+                generatedAt: ch.generatedAt ? new Date(ch.generatedAt) : null,
+                editedAt: ch.editedAt ? new Date(ch.editedAt) : null,
+              },
+            });
+          } else {
+            await db.chapter.create({
+              data: {
+                id: ch.id,
+                bookId: ch.bookId,
+                chapterNumber: ch.chapterNumber,
+                title: ch.title,
+                outline: ch.outline,
+                markdown: ch.markdown,
+                status: ch.status,
+                generatedAt: ch.generatedAt ? new Date(ch.generatedAt) : null,
+                editedAt: ch.editedAt ? new Date(ch.editedAt) : null,
+              },
+            });
+          }
+          chaptersRestored++;
+        }
+      }
+    }
+  } catch (err) {
+    errors.push(`Pull error: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  return { booksRestored, chaptersRestored, errors };
+}
+
+// ─── SQL Setup Script ────────────────────────────────────────────────
+
+/** Get the SQL setup script for first-time Supabase setup */
 export function getSetupSQL(): string {
-  return `-- E-book Generator: Supabase Tables Setup
+  return `-- ═══════════════════════════════════════════════════════════════
+-- E-book Generator: COMPLETE Supabase Backend Setup
 -- Run this in Supabase Dashboard → SQL Editor → New Query → Paste → Run
+-- ═══════════════════════════════════════════════════════════════
+
+-- ============================================
+-- 1. CREATE TABLES
+-- ============================================
 
 CREATE TABLE IF NOT EXISTS books (
   id TEXT PRIMARY KEY,
+  user_id TEXT,
   prompt TEXT NOT NULL,
   audience TEXT DEFAULT 'General readers',
   tone TEXT DEFAULT 'Informative and engaging',
@@ -344,12 +815,71 @@ CREATE TABLE IF NOT EXISTS chapters (
   edited_at TIMESTAMPTZ
 );
 
+-- Track which files are stored in Supabase Storage
+CREATE TABLE IF NOT EXISTS book_files (
+  id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  book_id TEXT NOT NULL REFERENCES books(id) ON DELETE CASCADE,
+  file_type TEXT NOT NULL,
+  storage_path TEXT NOT NULL,
+  file_size BIGINT DEFAULT 0,
+  content_type TEXT DEFAULT 'application/octet-stream',
+  uploaded_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(book_id, file_type)
+);
+
+-- ============================================
+-- 2. ENABLE ROW LEVEL SECURITY
+-- ============================================
+
 ALTER TABLE books ENABLE ROW LEVEL SECURITY;
 ALTER TABLE chapters ENABLE ROW LEVEL SECURITY;
+ALTER TABLE book_files ENABLE ROW LEVEL SECURITY;
 
-CREATE POLICY "Service role full access on books" ON books FOR ALL USING (auth.role() = 'service_role');
-CREATE POLICY "Service role full access on chapters" ON chapters FOR ALL USING (auth.role() = 'service_role');
+-- ============================================
+-- 3. CREATE POLICIES (service_role = full access)
+-- ============================================
+
+CREATE POLICY "Service role full access on books" ON books
+  FOR ALL USING (auth.role() = 'service_role');
+
+CREATE POLICY "Service role full access on chapters" ON chapters
+  FOR ALL USING (auth.role() = 'service_role');
+
+CREATE POLICY "Service role full access on book_files" ON book_files
+  FOR ALL USING (auth.role() = 'service_role');
+
+-- ============================================
+-- 4. CREATE INDEXES
+-- ============================================
 
 CREATE INDEX IF NOT EXISTS idx_chapters_book_id ON chapters(book_id);
-CREATE INDEX IF NOT EXISTS idx_books_status ON books(status);`;
+CREATE INDEX IF NOT EXISTS idx_books_status ON books(status);
+CREATE INDEX IF NOT EXISTS idx_books_user_id ON books(user_id);
+CREATE INDEX IF NOT EXISTS idx_book_files_book_id ON book_files(book_id);
+CREATE INDEX IF NOT EXISTS idx_book_files_file_type ON book_files(file_type);
+
+-- ============================================
+-- 5. CREATE STORAGE BUCKET + POLICIES
+-- ============================================
+
+INSERT INTO storage.buckets (id, name, public)
+  VALUES ('book-exports', 'book-exports', false)
+  ON CONFLICT (id) DO NOTHING;
+
+CREATE POLICY "Service role can upload files" ON storage.objects
+  FOR INSERT WITH CHECK (bucket_id = 'book-exports' AND auth.role() = 'service_role');
+
+CREATE POLICY "Service role can read files" ON storage.objects
+  FOR SELECT USING (bucket_id = 'book-exports' AND auth.role() = 'service_role');
+
+CREATE POLICY "Service role can delete files" ON storage.objects
+  FOR DELETE USING (bucket_id = 'book-exports' AND auth.role() = 'service_role');
+
+CREATE POLICY "Service role can update files" ON storage.objects
+  FOR UPDATE USING (bucket_id = 'book-exports' AND auth.role() = 'service_role');
+
+-- ═══════════════════════════════════════════════════════════════
+-- DONE! Your Supabase backend is ready.
+-- Next: Go back to the app and click "Push to Cloud"
+-- ═══════════════════════════════════════════════════════════════`;
 }
