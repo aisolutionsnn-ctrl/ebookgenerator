@@ -26,7 +26,30 @@ Work Log:
 Stage Summary:
 - Full-stack e-book generator implemented
 - Database: SQLite via Prisma with Book and Chapter models
-- Backend: OpenRouter client with qwen/qwen3-coder:free model, 3-phase pipeline (Plan → Write → Export)
+- Backend: Dual LLM provider (z-ai-web-dev-sdk default + OpenRouter optional), 3-phase pipeline (Plan → Write → Export)
 - Frontend: Clean responsive UI with progress tracking and chapter previews
 - Exports: EPUB (Pandoc) and PDF (WeasyPrint)
 - All code passes ESLint
+
+---
+Task ID: 2
+Agent: Main
+Task: Fix rate-limit issues, add resume capability, fix EPUB export
+
+Work Log:
+- Added z-ai-web-dev-sdk as default LLM provider (no API key needed) alongside OpenRouter
+- Added 8-second delay between LLM API calls to avoid rate limiting (429 errors)
+- Added resume-from-checkpoint capability: pipeline detects already-done phases/chapters and skips them
+- Added POST /api/books/:id/resume endpoint
+- Added "Resume from Checkpoint" button in frontend for failed books
+- Fixed EPUB export: removed invalid `cover-image: false` from metadata.yml
+- Added maxBuffer for Pandoc subprocess (10MB for large books)
+- Reset stale GENERATING/EDITING chapter statuses to PENDING on resume
+- End-to-end test completed successfully: "Small Space Veggie Gardening" — 6 chapters, EPUB + PDF generated
+- All lint checks pass
+
+Stage Summary:
+- Rate limiting handled with inter-call delays
+- Resume capability fully functional (tested: resumed from 3/6 chapters done → completed all 6 + exports)
+- EPUB and PDF exports working and downloadable
+- Full e-book generation tested end-to-end with real LLM calls

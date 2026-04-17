@@ -49,7 +49,6 @@ export async function exportToEpub(input: EpubExportInput): Promise<string> {
 title: "${escapeYaml(title)}"
 subtitle: "${escapeYaml(subtitle)}"
 lang: en
-cover-image: false
 ---
 `;
     const metadataPath = join(workDir, "metadata.yml");
@@ -85,6 +84,7 @@ cover-image: false
 
     const { stdout, stderr } = await execFileAsync("pandoc", pandocArgs, {
       timeout: 60_000,
+      maxBuffer: 10 * 1024 * 1024, // 10MB buffer for large books
     });
 
     if (stderr) {
