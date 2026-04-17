@@ -8,6 +8,8 @@ import { db } from "@/lib/db";
 import { enqueueBookJob } from "@/lib/jobQueue";
 import { isValidLanguage } from "@/lib/i18n";
 import { PDF_TEMPLATES, type PdfTemplate } from "@/lib/pdfTemplates";
+import { getCurrentUser } from "@/lib/authCookies";
+import { syncBookToCloud, type SyncBookData } from "@/lib/supabaseSync";
 
 const MAX_PROMPT_LENGTH = 2000;
 
@@ -52,6 +54,9 @@ export async function POST(request: NextRequest) {
     const safePdfTemplate: PdfTemplate =
       validTemplates.includes(pdfTemplate) ? pdfTemplate : "professional";
 
+    // Get current user (if authenticated)
+    const authUser = await getCurrentUser();
+
     // Create book record
     const book = await db.book.create({
       data: {
@@ -61,6 +66,7 @@ export async function POST(request: NextRequest) {
         lengthHint: safeLengthHint,
         language: safeLanguage,
         pdfTemplate: safePdfTemplate,
+        userId: authUser?.id ?? null,
         status: "PLANNING",
         phasesJson: JSON.stringify({
           planning: false,
@@ -72,6 +78,32 @@ export async function POST(request: NextRequest) {
 
     // Enqueue the generation job
     enqueueBookJob(book.id);
+
+    // Sync to Supabase (async, non-blocking)
+    syncBookToCloud({
+      id: book.id,
+      userId: authUser?.id ?? null,
+      prompt: book.prompt,
+      audience: book.audience,
+      tone: book.tone,
+      lengthHint: book.lengthHint,
+      status: book.status,
+      title: book.title,
+      subtitle: book.subtitle,
+      tocJson: book.tocJson,
+      phasesJson: book.phasesJson,
+      errorMessage: book.errorMessage,
+      epubPath: book.epubPath,
+      pdfPath: book.pdfPath,
+      tokenUsageJson: book.tokenUsageJson,
+      metadataJson: book.metadataJson,
+      language: book.language,
+      mobiPath: book.mobiPath,
+      pdfTemplate: book.pdfTemplate,
+      coverImagePath: book.coverImagePath,
+      createdAt: book.createdAt.toISOString(),
+      completedAt: book.completedAt?.toISOString() ?? null,
+    }).catch((err) => console.warn("[Sync] Book sync failed:", err));
 
     return NextResponse.json(
       {

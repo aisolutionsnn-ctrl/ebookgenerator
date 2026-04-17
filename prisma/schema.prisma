@@ -12,6 +12,7 @@ datasource db {
 
 model Book {
   id              String    @id @default(cuid())
+  userId          String?   // Supabase auth user ID (null for anonymous/local)
   prompt          String    // The user's original prompt / topic description
   audience        String    @default("General readers")
   tone            String    @default("Informative and engaging")

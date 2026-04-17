@@ -43,6 +43,7 @@ async function ensureTables(): Promise<boolean> {
 
 export interface SyncBookData {
   id: string;
+  userId: string | null;
   prompt: string;
   audience: string;
   tone: string;
@@ -69,6 +70,7 @@ export interface SyncBookData {
 function bookToRow(b: SyncBookData): Record<string, unknown> {
   return {
     id: b.id,
+    user_id: b.userId,
     prompt: b.prompt,
     audience: b.audience,
     tone: b.tone,
@@ -96,6 +98,7 @@ function bookToRow(b: SyncBookData): Record<string, unknown> {
 function rowToBook(row: Record<string, unknown>): SyncBookData {
   return {
     id: row.id as string,
+    userId: (row.user_id as string) ?? null,
     prompt: row.prompt as string,
     audience: (row.audience as string) ?? "General readers",
     tone: (row.tone as string) ?? "Informative and engaging",

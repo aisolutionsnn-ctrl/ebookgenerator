@@ -5,6 +5,7 @@ import {
   BookOpen, Download, FileText, Loader2, CheckCircle2, Circle,
   Clock, AlertCircle, Sparkles, ChevronDown, ChevronUp, RotateCcw,
   Sun, Moon, History, BarChart3, Edit3, X, Languages, Palette,
+  LogIn, LogOut, User, Mail, Lock, UserPlus,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -14,6 +15,8 @@ import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Label } from "@/components/ui/label";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
@@ -56,7 +59,13 @@ interface BookListItem {
   createdAt: string; completedAt: string | null;
 }
 
-type ViewMode = "landing" | "generate" | "progress" | "history" | "dashboard";
+type ViewMode = "landing" | "generate" | "progress" | "history" | "dashboard" | "auth";
+
+interface AuthUser {
+  id: string;
+  email: string;
+  displayName: string | null;
+}
 
 // ─── Dark Mode Hook ───────────────────────────────────────────────────
 
@@ -89,6 +98,56 @@ export default function Home() {
   const [bookData, setBookData] = useState<BookData | null>(null);
   const [books, setBooks] = useState<BookListItem[]>([]);
   const { dark, toggle: toggleDark } = useDarkMode();
+
+  // Auth state
+  const [authUser, setAuthUser] = useState<AuthUser | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
+
+  // Check session on mount
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch("/api/auth/session");
+        if (res.ok) {
+          const data = await res.json();
+          if (data.authenticated && data.user) {
+            setAuthUser(data.user);
+          }
+        }
+      } catch { /* ignore */ } finally { setAuthLoading(false); }
+    })();
+  }, []);
+
+  const handleLogin = useCallback(async (email: string, password: string) => {
+    const res = await fetch("/api/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, password }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "Login failed");
+    setAuthUser(data.user);
+    setView("landing");
+  }, []);
+
+  const handleRegister = useCallback(async (email: string, password: string, displayName: string) => {
+    const res = await fetch("/api/auth/register", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, password, displayName }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "Registration failed");
+    if (!data.user) throw new Error(data.message || "Registration succeeded but no session");
+    setAuthUser(data.user);
+    setView("landing");
+  }, []);
+
+  const handleLogout = useCallback(async () => {
+    await fetch("/api/auth/logout", { method: "POST" });
+    setAuthUser(null);
+    setView("landing");
+  }, []);
 
   // Form state
   const [prompt, setPrompt] = useState("");
@@ -241,6 +300,20 @@ export default function Home() {
           </nav>
 
           <div className="ml-auto flex items-center gap-2">
+            {authUser ? (
+              <div className="flex items-center gap-2">
+                <span className="text-sm text-muted-foreground hidden sm:inline">
+                  {authUser.displayName || authUser.email}
+                </span>
+                <Button variant="ghost" size="sm" onClick={handleLogout}>
+                  <LogOut className="w-4 h-4 mr-1" /> Logout
+                </Button>
+              </div>
+            ) : (
+              <Button variant="outline" size="sm" onClick={() => setView("auth")}>
+                <LogIn className="w-4 h-4 mr-1" /> Sign In
+              </Button>
+            )}
             <Button variant="ghost" size="icon" onClick={toggleDark} title="Toggle dark mode">
               {dark ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
             </Button>
@@ -280,6 +353,12 @@ export default function Home() {
         )}
         {view === "history" && <HistoryView books={books} onOpen={openBook} onRefresh={fetchBooks} />}
         {view === "dashboard" && <DashboardView books={books} />}
+        {view === "auth" && (
+          <AuthView
+            onLogin={handleLogin}
+            onRegister={handleRegister}
+          />
+        )}
       </main>
 
       {/* Footer */}
@@ -717,6 +796,143 @@ function DashboardView({ books }: { books: BookListItem[] }) {
               ))}
             </div>
           )}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+// ─── Auth View (Login / Register) ─────────────────────────────────────
+
+function AuthView({
+  onLogin,
+  onRegister,
+}: {
+  onLogin: (email: string, password: string) => Promise<void>;
+  onRegister: (email: string, password: string, displayName: string) => Promise<void>;
+}) {
+  const [mode, setMode] = useState<"login" | "register">("login");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [displayName, setDisplayName] = useState("");
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError("");
+    setLoading(true);
+    try {
+      if (mode === "login") {
+        await onLogin(email, password);
+      } else {
+        if (password.length < 6) {
+          setError("Password must be at least 6 characters.");
+          return;
+        }
+        await onRegister(email, password, displayName);
+      }
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Something went wrong");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="max-w-md mx-auto py-12">
+      <Card>
+        <CardHeader className="text-center">
+          <div className="mx-auto mb-2 flex items-center justify-center w-12 h-12 rounded-full bg-primary/10">
+            <User className="w-6 h-6 text-primary" />
+          </div>
+          <CardTitle className="text-xl">
+            {mode === "login" ? "Welcome Back" : "Create Account"}
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <Tabs value={mode} onValueChange={(v) => { setMode(v as "login" | "register"); setError(""); }}>
+            <TabsList className="grid w-full grid-cols-2 mb-6">
+              <TabsTrigger value="login">Sign In</TabsTrigger>
+              <TabsTrigger value="register">Register</TabsTrigger>
+            </TabsList>
+          </Tabs>
+
+          <form onSubmit={handleSubmit} className="space-y-4">
+            {mode === "register" && (
+              <div className="space-y-2">
+                <Label htmlFor="displayName">Display Name</Label>
+                <div className="relative">
+                  <UserPlus className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
+                  <Input
+                    id="displayName"
+                    placeholder="Your name"
+                    value={displayName}
+                    onChange={(e) => setDisplayName(e.target.value)}
+                    className="pl-9"
+                  />
+                </div>
+              </div>
+            )}
+
+            <div className="space-y-2">
+              <Label htmlFor="email">Email</Label>
+              <div className="relative">
+                <Mail className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
+                <Input
+                  id="email"
+                  type="email"
+                  placeholder="you@example.com"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  required
+                  className="pl-9"
+                />
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="password">Password</Label>
+              <div className="relative">
+                <Lock className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
+                <Input
+                  id="password"
+                  type="password"
+                  placeholder="••••••••"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  required
+                  minLength={6}
+                  className="pl-9"
+                />
+              </div>
+              {mode === "register" && (
+                <p className="text-xs text-muted-foreground">Minimum 6 characters.</p>
+              )}
+            </div>
+
+            {error && (
+              <div className="rounded-lg border border-destructive/50 bg-destructive/5 p-3 text-sm text-destructive">
+                {error}
+              </div>
+            )}
+
+            <Button type="submit" className="w-full" disabled={loading}>
+              {loading ? (
+                <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> {mode === "login" ? "Signing in..." : "Creating account..."}</>
+              ) : (
+                <>{mode === "login" ? "Sign In" : "Create Account"}</>
+              )}
+            </Button>
+          </form>
+
+          <div className="mt-4 text-center text-sm text-muted-foreground">
+            {mode === "login" ? (
+              <>Don&apos;t have an account? <button onClick={() => { setMode("register"); setError(""); }} className="text-primary hover:underline">Register</button></>
+            ) : (
+              <>Already have an account? <button onClick={() => { setMode("login"); setError(""); }} className="text-primary hover:underline">Sign in</button></>
+            )}
+          </div>
         </CardContent>
       </Card>
     </div>
