@@ -1,11 +1,14 @@
 /**
- * GET /api/books/:id
- *
- * Retrieve a book's full status, progress, chapter list, and metadata.
+ * GET /api/books/:id — Retrieve a book's full status
+ * DELETE /api/books/:id — Delete a book and all its data
  */
 
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
+import { getCurrentUser } from "@/lib/authCookies";
+import { deleteBookFromCloud } from "@/lib/supabaseSync";
+import { unlink } from "fs/promises";
+import { existsSync } from "fs";
 
 function safeParseJson(str: string | null): unknown {
   if (!str) return null;
@@ -90,6 +93,54 @@ export async function GET(
     });
   } catch (err: unknown) {
     console.error("[API] GET /api/books/:id error:", err);
+    const message = err instanceof Error ? err.message : "Internal server error";
+    return NextResponse.json({ error: message }, { status: 500 });
+  }
+}
+
+/** DELETE /api/books/:id — Delete a book, its chapters, files, and cloud data */
+export async function DELETE(
+  _request: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  try {
+    const { id } = await params;
+
+    // Check if user is authenticated
+    const authUser = await getCurrentUser();
+
+    const book = await db.book.findUnique({
+      where: { id },
+      select: { id: true, userId: true, pdfPath: true, epubPath: true, mobiPath: true, coverImagePath: true },
+    });
+
+    if (!book) {
+      return NextResponse.json({ error: "Book not found." }, { status: 404 });
+    }
+
+    // If user is logged in, they can only delete their own books
+    // If no user is logged in, allow deletion of books without userId (anonymous)
+    if (authUser && book.userId && book.userId !== authUser.id) {
+      return NextResponse.json({ error: "You can only delete your own books." }, { status: 403 });
+    }
+
+    // Delete local files
+    const filePaths = [book.pdfPath, book.epubPath, book.mobiPath, book.coverImagePath].filter(Boolean) as string[];
+    for (const filePath of filePaths) {
+      if (filePath && existsSync(filePath)) {
+        try { await unlink(filePath); } catch { /* ignore file delete errors */ }
+      }
+    }
+
+    // Delete from Supabase cloud (non-blocking)
+    deleteBookFromCloud(id).catch((err) => console.warn("[API] Cloud delete failed:", err));
+
+    // Delete from local DB (chapters cascade)
+    await db.book.delete({ where: { id } });
+
+    return NextResponse.json({ success: true, message: "Book deleted." });
+  } catch (err: unknown) {
+    console.error("[API] DELETE /api/books/:id error:", err);
     const message = err instanceof Error ? err.message : "Internal server error";
     return NextResponse.json({ error: message }, { status: 500 });
   }

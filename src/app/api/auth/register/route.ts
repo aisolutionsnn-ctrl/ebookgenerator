@@ -25,15 +25,25 @@ export async function POST(request: NextRequest) {
 
     // Set cookies if we got tokens (email confirmation might be disabled)
     const anyResult = result as Record<string, unknown>;
-    if (anyResult.accessToken && anyResult.refreshToken) {
+    const hasSession = !!(anyResult.accessToken && anyResult.refreshToken);
+
+    if (hasSession) {
       await setAuthCookies(anyResult.accessToken as string, anyResult.refreshToken as string);
+    }
+
+    // If no session, email verification is required
+    if (!hasSession) {
+      return NextResponse.json({
+        user: null,
+        needsVerification: true,
+        message: "Registration successful! Please check your email to confirm your account.",
+      }, { status: 201 });
     }
 
     return NextResponse.json({
       user: result.user,
-      message: anyResult.accessToken
-        ? "Registration successful!"
-        : "Registration successful! Please check your email to confirm your account.",
+      needsVerification: false,
+      message: "Registration successful!",
     }, { status: 201 });
   } catch (err: unknown) {
     console.error("[API] POST /api/auth/register error:", err);

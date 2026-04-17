@@ -122,7 +122,11 @@ export async function POST(request: NextRequest) {
 
 export async function GET() {
   try {
+    // Get current user — if logged in, only return their books
+    const authUser = await getCurrentUser();
+
     const books = await db.book.findMany({
+      where: authUser ? { userId: authUser.id } : undefined,
       orderBy: { createdAt: "desc" },
       select: {
         id: true,
@@ -136,6 +140,7 @@ export async function GET() {
         epubPath: true,
         pdfPath: true,
         mobiPath: true,
+        userId: true,
         createdAt: true,
         completedAt: true,
       },

@@ -57,6 +57,7 @@ interface BookData {
 interface BookListItem {
   id: string; title: string | null; subtitle: string | null; status: string;
   prompt: string; language: string; coverImagePath: string | null;
+  userId: string | null;
   createdAt: string; completedAt: string | null;
 }
 
@@ -131,6 +132,10 @@ export default function Home() {
     setView("landing");
   }, []);
 
+  // Email verification state
+  const [verificationNeeded, setVerificationNeeded] = useState(false);
+  const [verificationEmail, setVerificationEmail] = useState("");
+
   const handleRegister = useCallback(async (email: string, password: string, displayName: string) => {
     const res = await fetch("/api/auth/register", {
       method: "POST",
@@ -139,6 +144,14 @@ export default function Home() {
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || "Registration failed");
+
+    // Check if email verification is needed (no session returned)
+    if (data.needsVerification) {
+      setVerificationNeeded(true);
+      setVerificationEmail(email);
+      return;
+    }
+
     if (!data.user) throw new Error(data.message || "Registration succeeded but no session");
     setAuthUser(data.user);
     setView("landing");
@@ -274,6 +287,27 @@ export default function Home() {
     setView("progress");
   };
 
+  // ── Delete a book ──────────────────────────────────────────────
+  const handleDeleteBook = useCallback(async (bookId: string) => {
+    try {
+      const res = await fetch(`/api/books/${bookId}`, { method: "DELETE" });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "Delete failed");
+      }
+      // Refresh the list
+      await fetchBooks();
+      // If we're viewing this book, go back to history
+      if (activeBookId === bookId) {
+        setActiveBookId(null);
+        setBookData(null);
+        setView("history");
+      }
+    } catch (err: unknown) {
+      alert(err instanceof Error ? err.message : "Failed to delete book");
+    }
+  }, [fetchBooks, activeBookId]);
+
   // ── Render ──────────────────────────────────────────────────────
 
   return (
@@ -355,13 +389,16 @@ export default function Home() {
             <Loader2 className="w-8 h-8 animate-spin text-muted-foreground" />
           </div>
         )}
-        {view === "history" && <HistoryView books={books} onOpen={openBook} onRefresh={fetchBooks} />}
+        {view === "history" && <HistoryView books={books} onOpen={openBook} onRefresh={fetchBooks} onDelete={handleDeleteBook} />}
         {view === "dashboard" && <DashboardView books={books} />}
         {view === "cloud" && <CloudView />}
         {view === "auth" && (
           <AuthView
             onLogin={handleLogin}
             onRegister={handleRegister}
+            verificationNeeded={verificationNeeded}
+            verificationEmail={verificationEmail}
+            onVerificationDismiss={() => setVerificationNeeded(false)}
           />
         )}
       </main>
@@ -701,7 +738,20 @@ function BookProgress({
 
 // ─── History View ──────────────────────────────────────────────────────
 
-function HistoryView({ books, onOpen, onRefresh }: { books: BookListItem[]; onOpen: (id: string) => void; onRefresh: () => void }) {
+function HistoryView({ books, onOpen, onRefresh, onDelete }: { books: BookListItem[]; onOpen: (id: string) => void; onRefresh: () => void; onDelete: (id: string) => void }) {
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+
+  const handleDelete = async (bookId: string) => {
+    setDeletingId(bookId);
+    setConfirmDeleteId(null);
+    try {
+      await onDelete(bookId);
+    } finally {
+      setDeletingId(null);
+    }
+  };
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
@@ -713,17 +763,38 @@ function HistoryView({ books, onOpen, onRefresh }: { books: BookListItem[]; onOp
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {books.map((b) => (
-            <Card key={b.id} className="cursor-pointer hover:shadow-md transition-shadow" onClick={() => onOpen(b.id)}>
+            <Card key={b.id} className="group hover:shadow-md transition-shadow">
               <CardContent className="pt-5 space-y-2">
                 <div className="flex items-start justify-between gap-2">
-                  <h3 className="font-semibold leading-tight line-clamp-2">{b.title || "Untitled"}</h3>
-                  <Badge variant={b.status === "DONE" ? "default" : b.status === "FAILED" ? "destructive" : "secondary"} className="shrink-0 text-[10px]">{b.status}</Badge>
+                  <h3 className="font-semibold leading-tight line-clamp-2 cursor-pointer hover:text-primary transition-colors" onClick={() => onOpen(b.id)}>{b.title || "Untitled"}</h3>
+                  <div className="flex items-center gap-1 shrink-0">
+                    <Badge variant={b.status === "DONE" ? "default" : b.status === "FAILED" ? "destructive" : "secondary"} className="text-[10px]">{b.status}</Badge>
+                  </div>
                 </div>
                 {b.subtitle && <p className="text-sm text-muted-foreground line-clamp-1">{b.subtitle}</p>}
-                <p className="text-xs text-muted-foreground line-clamp-2">{b.prompt.slice(0, 120)}</p>
+                <p className="text-xs text-muted-foreground line-clamp-2 cursor-pointer" onClick={() => onOpen(b.id)}>{b.prompt.slice(0, 120)}</p>
                 <div className="flex items-center gap-2 text-xs text-muted-foreground pt-1">
                   <span>{new Date(b.createdAt).toLocaleDateString()}</span>
                   {b.language && b.language !== "en" && <Badge variant="outline" className="text-[10px]">{b.language.toUpperCase()}</Badge>}
+                </div>
+                {/* Action buttons */}
+                <div className="flex items-center gap-2 pt-2 border-t mt-2">
+                  <Button variant="ghost" size="sm" className="flex-1" onClick={() => onOpen(b.id)}>
+                    <BookOpen className="w-3.5 h-3.5 mr-1" /> View
+                  </Button>
+                  {confirmDeleteId === b.id ? (
+                    <>
+                      <Button variant="destructive" size="sm" className="flex-1" onClick={() => handleDelete(b.id)} disabled={deletingId === b.id}>
+                        {deletingId === b.id ? <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" /> : <CheckCircle2 className="w-3.5 h-3.5 mr-1" />}
+                        Confirm
+                      </Button>
+                      <Button variant="ghost" size="sm" onClick={() => setConfirmDeleteId(null)}>Cancel</Button>
+                    </>
+                  ) : (
+                    <Button variant="ghost" size="sm" className="text-destructive hover:text-destructive hover:bg-destructive/10" onClick={() => setConfirmDeleteId(b.id)}>
+                      <X className="w-3.5 h-3.5 mr-1" /> Delete
+                    </Button>
+                  )}
                 </div>
               </CardContent>
             </Card>
@@ -812,9 +883,15 @@ function DashboardView({ books }: { books: BookListItem[] }) {
 function AuthView({
   onLogin,
   onRegister,
+  verificationNeeded,
+  verificationEmail,
+  onVerificationDismiss,
 }: {
   onLogin: (email: string, password: string) => Promise<void>;
   onRegister: (email: string, password: string, displayName: string) => Promise<void>;
+  verificationNeeded: boolean;
+  verificationEmail: string;
+  onVerificationDismiss: () => void;
 }) {
   const [mode, setMode] = useState<"login" | "register">("login");
   const [email, setEmail] = useState("");
@@ -843,6 +920,40 @@ function AuthView({
       setLoading(false);
     }
   };
+
+  // Email verification success screen
+  if (verificationNeeded) {
+    return (
+      <div className="max-w-md mx-auto py-12">
+        <Card>
+          <CardHeader className="text-center">
+            <div className="mx-auto mb-2 flex items-center justify-center w-14 h-14 rounded-full bg-green-500/10">
+              <Mail className="w-7 h-7 text-green-600" />
+            </div>
+            <CardTitle className="text-xl">Check Your Email</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="rounded-lg border border-green-500/30 bg-green-500/5 p-4 space-y-3">
+              <p className="text-sm text-center">
+                We&apos;ve sent a verification link to:
+              </p>
+              <p className="text-sm font-semibold text-center break-all">{verificationEmail}</p>
+              <p className="text-xs text-muted-foreground text-center">
+                Click the link in the email to activate your account, then sign in below.
+              </p>
+            </div>
+            <div className="text-xs text-muted-foreground text-center space-y-1">
+              <p>Didn&apos;t receive the email? Check your spam folder.</p>
+              <p>The link expires in 24 hours.</p>
+            </div>
+            <Button variant="outline" className="w-full" onClick={() => { onVerificationDismiss(); setMode("login"); }}>
+              <LogIn className="w-4 h-4 mr-2" /> Go to Sign In
+            </Button>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
 
   return (
     <div className="max-w-md mx-auto py-12">
