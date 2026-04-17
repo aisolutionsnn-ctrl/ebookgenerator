@@ -11,6 +11,7 @@
  */
 
 import { createChatCompletionJSON } from "./openRouterClient";
+import { getLanguageInstruction, type LanguageCode } from "./i18n";
 
 export interface ChapterOutline {
   chapterTitle: string;
@@ -60,12 +61,13 @@ Respond with ONLY the JSON object. No explanations, no preamble.`;
  */
 export async function planBook(
   prompt: string,
-  options?: { signal?: AbortSignal }
+  options?: { signal?: AbortSignal; language?: LanguageCode }
 ): Promise<BookPlan> {
+  const languageInstruction = getLanguageInstruction(options?.language ?? "en");
+
   const userMessage = `Create a book plan based on the following prompt:
-
 ${prompt}
-
+${languageInstruction}
 Remember: respond with ONLY the JSON object following the exact schema specified.`;
 
   const plan = await createChatCompletionJSON<BookPlan>(

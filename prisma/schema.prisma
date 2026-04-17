@@ -11,23 +11,29 @@ datasource db {
 }
 
 model Book {
-  id          String    @id @default(cuid())
-  prompt      String    // The user's original prompt / topic description
-  audience    String    @default("General readers")
-  tone        String    @default("Informative and engaging")
-  lengthHint  String    @default("Medium (8-12 chapters)")
-  status      String    @default("PLANNING") // PLANNING | WRITING | EXPORTING | DONE | FAILED
-  title       String?
-  subtitle    String?
-  tocJson     String?   // JSON string: [{ chapterTitle, subTopics[] }]
-  phasesJson  String?   // JSON string: { planning, writing, exporting }
-  errorMessage String?
-  epubPath    String?
-  pdfPath     String?
-  createdAt   DateTime  @default(now())
-  completedAt DateTime?
+  id              String    @id @default(cuid())
+  prompt          String    // The user's original prompt / topic description
+  audience        String    @default("General readers")
+  tone            String    @default("Informative and engaging")
+  lengthHint      String    @default("Medium (8-12 chapters)")
+  status          String    @default("PLANNING") // PLANNING | WRITING | EXPORTING | DONE | FAILED
+  title           String?
+  subtitle        String?
+  tocJson         String?   // JSON string: [{ chapterTitle, subTopics[] }]
+  phasesJson      String?   // JSON string: { planning, writing, exporting }
+  errorMessage    String?
+  epubPath        String?
+  pdfPath         String?
+  tokenUsageJson  String?   // JSON: { totalPromptTokens, totalCompletionTokens, totalTokens, estimatedCost, calls[] }
+  metadataJson    String?   // JSON: { keywords[], abstract, isbnPlaceholder, copyrightYear, copyrightPage, language, subject }
+  language        String    @default("en") // Language code for the book content
+  mobiPath        String?   // Path to generated MOBI file
+  pdfTemplate     String    @default("professional") // professional | academic | creative | minimalist
+  coverImagePath  String?   // Path to generated cover image
+  createdAt       DateTime  @default(now())
+  completedAt     DateTime?
 
-  chapters    Chapter[]
+  chapters        Chapter[]
 
   @@map("books")
 }

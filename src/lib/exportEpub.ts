@@ -1,23 +1,31 @@
 /**
- * EPUB Export Module
+ * EPUB Export Module (with T27: Enhanced Metadata)
  *
  * Converts a book's chapters (in Markdown) to EPUB format using Pandoc.
  *
  * Process:
  * 1. Write each chapter as a separate .md file
- * 2. Generate a metadata.yml with title, subtitle, ToC
+ * 2. Generate a metadata.yml with title, subtitle, keywords, description, etc.
  * 3. Call Pandoc to compile all chapters into an EPUB with a table of contents
  *
  * Requires: pandoc (already installed on the system)
  */
 
-import { writeFile, mkdir, rm } from "fs/promises";
+import { writeFile, mkdir, rm, copyFile } from "fs/promises";
 import { join } from "path";
 import { execFile } from "child_process";
 import { promisify } from "util";
-import type { ChapterOutline } from "./bookPlanner";
 
 const execFileAsync = promisify(execFile);
+
+export interface EpubMetadata {
+  keywords?: string[];
+  description?: string; // Abstract
+  subject?: string; // BISAC category
+  language?: string;
+  author?: string;
+  date?: string;
+}
 
 export interface EpubExportInput {
   title: string;
@@ -27,7 +35,9 @@ export interface EpubExportInput {
     title: string;
     markdown: string;
   }>;
-  outputDir: string; // Where to write the final .epub file
+  outputDir: string;
+  coverImagePath?: string; // T23: Path to generated cover image
+  metadata?: EpubMetadata; // T27: Enhanced metadata
 }
 
 /**
@@ -36,7 +46,7 @@ export interface EpubExportInput {
  * @returns Path to the generated .epub file
  */
 export async function exportToEpub(input: EpubExportInput): Promise<string> {
-  const { title, subtitle, chapters, outputDir } = input;
+  const { title, subtitle, chapters, outputDir, coverImagePath, metadata } = input;
 
   // Create a temporary working directory
   const workDir = join(outputDir, `_epub_work_${Date.now()}`);
@@ -44,20 +54,51 @@ export async function exportToEpub(input: EpubExportInput): Promise<string> {
   await mkdir(outputDir, { recursive: true });
 
   try {
-    // 1. Generate metadata.yml
-    const metadataYml = `---
-title: "${escapeYaml(title)}"
-subtitle: "${escapeYaml(subtitle)}"
-lang: en
----
-`;
+    // 1. Copy cover image if available
+    let coverArg: string | null = null;
+    if (coverImagePath) {
+      const coverDest = join(workDir, "cover.png");
+      try {
+        await copyFile(coverImagePath, coverDest);
+        coverArg = coverDest;
+      } catch {
+        console.warn("[EPUB] Could not copy cover image, skipping...");
+      }
+    }
+
+    // 2. Generate metadata.yml (T27: Enhanced with keywords, description, subject, etc.)
+    const metaLines: string[] = [
+      `title: "${escapeYaml(title)}"`,
+      `subtitle: "${escapeYaml(subtitle)}"`,
+      `lang: ${metadata?.language ?? "en"}`,
+    ];
+
+    if (metadata?.author) {
+      metaLines.push(`author: "${escapeYaml(metadata.author)}"`);
+    }
+    if (metadata?.subject) {
+      metaLines.push(`subject: "${escapeYaml(metadata.subject)}"`);
+    }
+    if (metadata?.description) {
+      metaLines.push(`description: "${escapeYaml(metadata.description.slice(0, 500))}"`);
+    }
+    if (metadata?.keywords && metadata.keywords.length > 0) {
+      metaLines.push(`keywords: "${escapeYaml(metadata.keywords.join(", "))}"`);
+    }
+    if (metadata?.date) {
+      metaLines.push(`date: "${metadata.date}"`);
+    }
+    if (coverArg) {
+      metaLines.push(`cover-image: cover.png`);
+    }
+
+    const metadataYml = `---\n${metaLines.join("\n")}\n---\n`;
     const metadataPath = join(workDir, "metadata.yml");
     await writeFile(metadataPath, metadataYml, "utf-8");
 
-    // 2. Write each chapter as a .md file
+    // 3. Write each chapter as a .md file
     const chapterPaths: string[] = [];
     for (const ch of chapters) {
-      // Prepend chapter title as H1 for Pandoc to pick up as chapter heading
       const content = `# ${ch.title}\n\n${ch.markdown}`;
       const filename = `chapter_${String(ch.chapterNumber).padStart(2, "0")}.md`;
       const filePath = join(workDir, filename);
@@ -65,7 +106,7 @@ lang: en
       chapterPaths.push(filePath);
     }
 
-    // 3. Call Pandoc to generate EPUB
+    // 4. Call Pandoc to generate EPUB
     const epubFilename = `${sanitizeFilename(title)}.epub`;
     const epubPath = join(outputDir, epubFilename);
 
@@ -80,11 +121,11 @@ lang: en
       "--epub-chapter-level=1",
     ];
 
-    console.log(`[EPUB] Running Pandoc: pandoc ${pandocArgs.join(" ")}`);
+    console.log(`[EPUB] Running Pandoc with ${chapters.length} chapters`);
 
-    const { stdout, stderr } = await execFileAsync("pandoc", pandocArgs, {
+    const { stderr } = await execFileAsync("pandoc", pandocArgs, {
       timeout: 60_000,
-      maxBuffer: 10 * 1024 * 1024, // 10MB buffer for large books
+      maxBuffer: 10 * 1024 * 1024,
     });
 
     if (stderr) {
@@ -94,25 +135,18 @@ lang: en
     console.log(`[EPUB] Generated: ${epubPath}`);
     return epubPath;
   } finally {
-    // Clean up temporary working directory
     try {
       await rm(workDir, { recursive: true, force: true });
     } catch {
-      // Non-critical — temp dir cleanup failure
+      // Non-critical
     }
   }
 }
 
-/**
- * Escape special characters for YAML string values.
- */
 function escapeYaml(str: string): string {
   return str.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\n");
 }
 
-/**
- * Sanitize a string for use as a filename.
- */
 function sanitizeFilename(str: string): string {
   return str
     .toLowerCase()

@@ -1,7 +1,8 @@
 /**
- * PDF Export Module
+ * PDF Export Module (with T22: Template System)
  *
  * Converts a book's chapters (in Markdown) to a styled PDF using WeasyPrint.
+ * Supports multiple PDF templates: professional, academic, creative, minimalist.
  *
  * Process:
  * 1. Convert each chapter's Markdown to HTML
@@ -11,10 +12,11 @@
  * Requires: weasyprint (already installed on the system)
  */
 
-import { writeFile, mkdir } from "fs/promises";
+import { writeFile, mkdir, unlink } from "fs/promises";
 import { join } from "path";
 import { execFile } from "child_process";
 import { promisify } from "util";
+import { getPdfTemplateCss, type PdfTemplate } from "./pdfTemplates";
 
 const execFileAsync = promisify(execFile);
 
@@ -27,6 +29,7 @@ export interface PdfExportInput {
     markdown: string;
   }>;
   outputDir: string;
+  template?: PdfTemplate;
 }
 
 /**
@@ -160,121 +163,10 @@ function escapeHtml(str: string): string {
 }
 
 /**
- * Generate the CSS stylesheet for the PDF.
+ * Generate the CSS stylesheet for the PDF based on the selected template.
  */
-function generatePdfCss(): string {
-  return `
-    @page {
-      size: A5;
-      margin: 2cm 1.8cm;
-      @bottom-center {
-        content: counter(page);
-        font-size: 9pt;
-        color: #666;
-      }
-    }
-    @page :first {
-      @bottom-center { content: none; }
-    }
-    body {
-      font-family: "Georgia", "Times New Roman", serif;
-      font-size: 11pt;
-      line-height: 1.6;
-      color: #1a1a1a;
-    }
-    h1 {
-      font-size: 20pt;
-      margin-top: 2em;
-      margin-bottom: 0.5em;
-      page-break-before: always;
-      color: #111;
-    }
-    h1:first-of-type {
-      page-break-before: auto;
-    }
-    h2 {
-      font-size: 15pt;
-      margin-top: 1.5em;
-      margin-bottom: 0.4em;
-      color: #222;
-    }
-    h3 {
-      font-size: 12pt;
-      margin-top: 1.2em;
-      margin-bottom: 0.3em;
-      color: #333;
-    }
-    p {
-      margin-bottom: 0.8em;
-      text-align: justify;
-    }
-    ul, ol {
-      margin-bottom: 0.8em;
-      padding-left: 1.5em;
-    }
-    li {
-      margin-bottom: 0.3em;
-    }
-    code {
-      font-family: "Courier New", monospace;
-      font-size: 9.5pt;
-      background: #f4f4f4;
-      padding: 0.1em 0.3em;
-      border-radius: 3px;
-    }
-    pre {
-      background: #f8f8f8;
-      border: 1px solid #ddd;
-      padding: 0.8em;
-      overflow-x: auto;
-      font-size: 9pt;
-      line-height: 1.4;
-      border-radius: 4px;
-    }
-    pre code {
-      background: none;
-      padding: 0;
-    }
-    hr {
-      border: none;
-      border-top: 1px solid #ccc;
-      margin: 1.5em 0;
-    }
-    .title-page {
-      text-align: center;
-      padding-top: 35%;
-    }
-    .title-page h1 {
-      font-size: 26pt;
-      page-break-before: auto;
-      margin-bottom: 0.3em;
-    }
-    .title-page .subtitle {
-      font-size: 14pt;
-      color: #555;
-      font-style: italic;
-      margin-bottom: 2em;
-    }
-    .toc {
-      page-break-after: always;
-    }
-    .toc h2 {
-      font-size: 18pt;
-      margin-bottom: 1em;
-    }
-    .toc ul {
-      list-style: none;
-      padding-left: 0;
-    }
-    .toc li {
-      margin-bottom: 0.4em;
-      font-size: 11pt;
-    }
-    .toc .chapter-num {
-      font-weight: bold;
-      margin-right: 0.5em;
-    }
-  `;
+function generatePdfCss(template: PdfTemplate = "professional"): string {
+  return getPdfTemplateCss(template);
 }
 
 /**
@@ -283,7 +175,7 @@ function generatePdfCss(): string {
  * @returns Path to the generated .pdf file
  */
 export async function exportToPdf(input: PdfExportInput): Promise<string> {
-  const { title, subtitle, chapters, outputDir } = input;
+  const { title, subtitle, chapters, outputDir, template = "professional" } = input;
   await mkdir(outputDir, { recursive: true });
 
   // 1. Build the full HTML document
@@ -320,7 +212,7 @@ export async function exportToPdf(input: PdfExportInput): Promise<string> {
 <head>
   <meta charset="UTF-8">
   <title>${escapeHtml(title)}</title>
-  <style>${generatePdfCss()}</style>
+  <style>${generatePdfCss(template)}</style>
 </head>
 <body>
   ${titlePage}
@@ -353,7 +245,6 @@ export async function exportToPdf(input: PdfExportInput): Promise<string> {
   } finally {
     // Clean up temp HTML file
     try {
-      const { unlink } = await import("fs/promises");
       await unlink(htmlPath);
     } catch {
       // Non-critical

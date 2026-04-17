@@ -14,12 +14,14 @@
 
 import { createChatCompletion } from "./openRouterClient";
 import type { ChapterOutline } from "./bookPlanner";
+import { getLanguageInstruction, type LanguageCode } from "./i18n";
 
 export interface BookContext {
   title: string;
   subtitle: string;
   audience: string;
   tone: string;
+  language?: LanguageCode;
 }
 
 // ─── Writer System Prompt ────────────────────────────────────────────
@@ -77,9 +79,10 @@ export async function generateChapterDraft(
   prevSummaries: string[],
   options?: { signal?: AbortSignal }
 ): Promise<string> {
+  const languageInstruction = getLanguageInstruction(context.language ?? "en");
   const systemPrompt = WRITER_SYSTEM_PROMPT
     .replace("{tone}", context.tone)
-    .replace("{audience}", context.audience);
+    .replace("{audience}", context.audience) + languageInstruction;
 
   const prevContext =
     prevSummaries.length > 0
