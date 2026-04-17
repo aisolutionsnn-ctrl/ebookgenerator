@@ -1,14 +1,13 @@
 // E-book Generator - Prisma Schema
-// PostgreSQL via Supabase
+// SQLite (local) + Supabase (cloud sync via REST API)
 
 generator client {
   provider = "prisma-client-js"
 }
 
 datasource db {
-  provider  = "postgresql"
-  url       = env("DATABASE_URL")
-  directUrl = env("DIRECT_URL")
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
 }
 
 model Book {
