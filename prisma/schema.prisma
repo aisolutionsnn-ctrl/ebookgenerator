@@ -1,0 +1,49 @@
+// E-book Generator - Prisma Schema
+// SQLite for MVP; can be migrated to Postgres later.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Book {
+  id          String    @id @default(cuid())
+  prompt      String    // The user's original prompt / topic description
+  audience    String    @default("General readers")
+  tone        String    @default("Informative and engaging")
+  lengthHint  String    @default("Medium (8-12 chapters)")
+  status      String    @default("PLANNING") // PLANNING | WRITING | EXPORTING | DONE | FAILED
+  title       String?
+  subtitle    String?
+  tocJson     String?   // JSON string: [{ chapterTitle, subTopics[] }]
+  phasesJson  String?   // JSON string: { planning, writing, exporting }
+  errorMessage String?
+  epubPath    String?
+  pdfPath     String?
+  createdAt   DateTime  @default(now())
+  completedAt DateTime?
+
+  chapters    Chapter[]
+
+  @@map("books")
+}
+
+model Chapter {
+  id            String   @id @default(cuid())
+  bookId        String
+  chapterNumber Int
+  title         String
+  outline       String?  // Sub-topics / bullet outline for this chapter
+  markdown      String?  // Generated Markdown content
+  status        String   @default("PENDING") // PENDING | GENERATING | EDITING | DONE | FAILED
+  generatedAt   DateTime?
+  editedAt      DateTime?
+
+  book Book @relation(fields: [bookId], references: [id], onDelete: Cascade)
+
+  @@map("chapters")
+}
