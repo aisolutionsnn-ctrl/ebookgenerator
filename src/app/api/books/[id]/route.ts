@@ -30,6 +30,26 @@ export async function GET(
       return NextResponse.json({ error: "Book not found." }, { status: 404 });
     }
 
+    // Auto-detect stale books: if stuck in PLANNING for >3min or WRITING/EXPORTING for >15min, mark as FAILED
+    const PLANNING_STALE_MS = 3 * 60 * 1000; // 3 minutes for planning
+    const WRITING_STALE_MS = 15 * 60 * 1000; // 15 minutes for writing/exporting
+    const STALE_THRESHOLD_MS = book.status === "PLANNING" ? PLANNING_STALE_MS : WRITING_STALE_MS;
+    const activeStatuses = ["PLANNING", "WRITING", "EXPORTING"];
+    if (activeStatuses.includes(book.status)) {
+      const age = Date.now() - new Date(book.createdAt).getTime();
+      if (age > STALE_THRESHOLD_MS && !book.completedAt) {
+        const stuckStatus = book.status;
+        const errorMsg = `Generation timed out — stuck in ${stuckStatus} for over 10 minutes. Click "Resume from Checkpoint" to retry.`;
+        console.warn(`[API] Book ${book.id} stuck in ${stuckStatus} for ${Math.round(age / 60000)}min, marking as FAILED`);
+        await db.book.update({
+          where: { id: book.id },
+          data: { status: "FAILED", errorMessage: errorMsg },
+        });
+        book.status = "FAILED";
+        book.errorMessage = errorMsg;
+      }
+    }
+
     const toc = safeParseJson(book.tocJson);
     const phases = safeParseJson(book.phasesJson) ?? { planning: false, writing: false, exporting: false };
     const metadata = safeParseJson(book.metadataJson);

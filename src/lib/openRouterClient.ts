@@ -254,18 +254,44 @@ export async function createChatCompletionJSON<T = unknown>(
 
   let text = result.content.trim();
 
-  // Strip markdown code fences if present
-  const fenceMatch = text.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/);
+  // Strip <think>...</think> blocks (some models emit reasoning tokens)
+  text = text.replace(/<think[\s\S]*?<\/think>/gi, '').trim();
+
+  // Strip markdown code fences if present (greedy to handle multi-block output)
+  const fenceMatch = text.match(/```(?:json)?\s*\n?([\s\S]*)\n?```/);
   if (fenceMatch) {
     text = fenceMatch[1].trim();
   }
 
+  // If the text still doesn't start with '{' or '[', try to find the first JSON object
+  if (!text.startsWith('{') && !text.startsWith('[')) {
+    const jsonStart = text.indexOf('{');
+    const jsonStartArr = text.indexOf('[');
+    const earliest = jsonStart === -1 ? jsonStartArr : jsonStartArr === -1 ? jsonStart : Math.min(jsonStart, jsonStartArr);
+    if (earliest !== -1) {
+      text = text.slice(earliest);
+    }
+  }
+
   try {
     return JSON.parse(text) as T;
-  } catch {
-    throw new Error(
-      `Failed to parse LLM response as JSON. Raw output (first 500 chars): ${text.slice(0, 500)}`
-    );
+  } catch (parseErr) {
+    // Last resort: try to fix truncated JSON by finding the last valid structure
+    try {
+      // Try to close unclosed arrays/objects
+      let fixed = text;
+      const openBraces = (fixed.match(/{/g) || []).length;
+      const closeBraces = (fixed.match(/}/g) || []).length;
+      const openBrackets = (fixed.match(/\[/g) || []).length;
+      const closeBrackets = (fixed.match(/]/g) || []).length;
+      for (let i = 0; i < openBraces - closeBraces; i++) fixed += '}';
+      for (let i = 0; i < openBrackets - closeBrackets; i++) fixed += ']';
+      return JSON.parse(fixed) as T;
+    } catch {
+      throw new Error(
+        `Failed to parse LLM response as JSON. Raw output (first 500 chars): ${text.slice(0, 500)}`
+      );
+    }
   }
 }
 
