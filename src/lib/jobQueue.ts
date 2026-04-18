@@ -40,7 +40,10 @@ import { syncBookToCloud, syncChapterToCloud, syncBookFilesToCloud, type SyncBoo
 // ─── Config ───────────────────────────────────────────────────────────
 
 /** Delay between LLM calls to avoid rate limits (ms) */
-const INTER_CALL_DELAY = 1_500;
+const INTER_CALL_DELAY = 1_200;
+
+/** Heartbeat interval — touch the book's updatedAt every N ms to prevent stale detection */
+const HEARTBEAT_INTERVAL_MS = 30_000; // 30 seconds
 
 // ─── Types ────────────────────────────────────────────────────────────
 
@@ -127,8 +130,8 @@ async function autoResumeStuckBooks(): Promise<void> {
   }
 }
 
-// Run auto-resume on module load (with a small delay to let DB initialize)
-setTimeout(autoResumeStuckBooks, 2000);
+// Run auto-resume on module load (short delay to let DB initialize)
+setTimeout(autoResumeStuckBooks, 500);
 
 // ─── Pipeline ─────────────────────────────────────────────────────────
 
@@ -144,6 +147,11 @@ async function runBookPipeline(bookId: string): Promise<void> {
   const tracker = createTokenTracker();
   const language = (book.language || "en") as LanguageCode;
   const pdfTemplate = (book.pdfTemplate || "professional") as PdfTemplate;
+
+  // ── Heartbeat: keep touching the book so stale detection never fires while we're active
+  const heartbeat = setInterval(async () => {
+    try { await touchBook(bookId); } catch { /* ignore */ }
+  }, HEARTBEAT_INTERVAL_MS);
 
   try {
     // ── Reset stale chapter statuses ────────────────────────
@@ -469,10 +477,13 @@ async function runBookPipeline(bookId: string): Promise<void> {
     if (finalBook) autoSyncBook(buildSyncBook(finalBook));
     autoSyncFiles({ id: bookId, pdfPath, epubPath, mobiPath: mobiPath ?? null, coverImagePath: coverPath ?? null });
 
+    clearInterval(heartbeat);
     console.log(`[Pipeline] Book generation complete: ${bookId}`);
   } catch (err: unknown) {
     const errorMessage = err instanceof Error ? err.message : String(err);
     console.error(`[Pipeline] Book generation failed (${bookId}):`, errorMessage);
+
+    clearInterval(heartbeat);
 
     await db.book.update({
       where: { id: bookId },

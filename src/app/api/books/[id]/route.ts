@@ -37,18 +37,19 @@ export async function GET(
     // Auto-detect stale books: if stuck for too long, mark as FAILED
     // Uses updatedAt (not createdAt) so books that were recently resumed aren't falsely marked stale
     // CRITICAL: Skip stale detection if the book is actively being processed by the job queue
-    // This prevents falsely marking books as FAILED when they're genuinely in progress
+    // The job queue now has a heartbeat that touches the book every 30 seconds,
+    // so if a book IS being processed, its updatedAt will always be recent.
     if (!isBookBeingProcessed(book.id)) {
-      const PLANNING_STALE_MS = 20 * 60 * 1000; // 20 minutes for planning (includes metadata generation)
-      const WRITING_STALE_MS = 90 * 60 * 1000;  // 90 minutes for writing (8-12 chapters × ~5min each)
-      const EXPORTING_STALE_MS = 15 * 60 * 1000; // 15 minutes for exporting
+      const PLANNING_STALE_MS = 15 * 60 * 1000; // 15 minutes for planning
+      const WRITING_STALE_MS = 45 * 60 * 1000;  // 45 minutes for writing (plenty for 8-12 chapters)
+      const EXPORTING_STALE_MS = 10 * 60 * 1000; // 10 minutes for exporting
       const STALE_THRESHOLD_MS = book.status === "PLANNING" ? PLANNING_STALE_MS : book.status === "EXPORTING" ? EXPORTING_STALE_MS : WRITING_STALE_MS;
       const activeStatuses = ["PLANNING", "WRITING", "EXPORTING"];
       if (activeStatuses.includes(book.status)) {
         const idleTime = Date.now() - new Date(book.updatedAt).getTime();
         if (idleTime > STALE_THRESHOLD_MS && !book.completedAt) {
           const stuckStatus = book.status;
-          const errorMsg = `Generation timed out — stuck in ${stuckStatus} with no progress for over ${Math.round(idleTime / 60000)} minutes. Click "Resume from Checkpoint" to retry.`;
+          const errorMsg = `Generation timed out — stuck in ${stuckStatus} for ${Math.round(idleTime / 60000)} minutes with no progress. The server may have restarted. Click "Resume from Checkpoint" to retry from where it left off.`;
           console.warn(`[API] Book ${book.id} stuck in ${stuckStatus} for ${Math.round(idleTime / 60000)}min (no update since ${book.updatedAt.toISOString()}), marking as FAILED`);
           await db.book.update({
             where: { id: book.id },
