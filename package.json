@@ -5,6 +5,8 @@
   "scripts": {
     "dev": "tail -f /dev/null | next dev --webpack -p 3000",
     "build": "next build && cp -r .next/static .next/standalone/.next/ && cp -r public .next/standalone/",
+    "vercel-build": "node -e \"require('fs').writeFileSync('/etc/.z-ai-config', JSON.stringify({baseUrl:'https://openrouter.ai/api/v1',apiKey:'placeholder'}))\" && next build",
+    "postinstall": "node -e \"try{require('fs').writeFileSync('.z-ai-config', JSON.stringify({baseUrl:'https://openrouter.ai/api/v1',apiKey:'placeholder'}))}catch(e){}\"",
     "start": "NODE_ENV=production bun .next/standalone/server.js 2>&1 | tee server.log",
     "lint": "eslint .",
     "db:push": "prisma db push",
