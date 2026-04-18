@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createChatCompletionJSON } from "@/lib/openRouterClient";
 import { db } from "@/lib/db";
 import { BATCH_BOOK_ANGLES_PROMPT } from "@/lib/agent/prompts";
+import { enqueueBookJob } from "@/lib/jobQueue";
 import type { BatchGenerateApiRequest, CompetitionResult } from "@/lib/agent/types";
 
 interface BookAngle {
@@ -123,6 +124,13 @@ export async function POST(request: NextRequest) {
         bookCount: bookIds.length,
       },
     });
+
+    // ── Step 5: Enqueue each book into the generation pipeline ──────────
+    for (const book of createdBooks) {
+      enqueueBookJob(book.id);
+      // Small delay between enqueues to avoid overwhelming the system
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
 
     return NextResponse.json({
       sessionId,
