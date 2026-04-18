@@ -24,6 +24,7 @@ import {
 import ReactMarkdown from "react-markdown";
 import { PDF_TEMPLATES, type PdfTemplate } from "@/lib/pdfTemplates";
 import { SUPPORTED_LANGUAGES, type LanguageCode } from "@/lib/i18n";
+import { EbookAgentView } from "@/components/ebook-agent-view";
 
 // ─── Types ────────────────────────────────────────────────────────────
 
@@ -61,7 +62,7 @@ interface BookListItem {
   createdAt: string; completedAt: string | null;
 }
 
-type ViewMode = "landing" | "generate" | "progress" | "history" | "dashboard" | "auth" | "cloud";
+type ViewMode = "landing" | "generate" | "progress" | "history" | "dashboard" | "auth" | "cloud" | "agent";
 
 interface AuthUser {
   id: string;
@@ -326,6 +327,9 @@ export default function Home() {
             <Button variant={view === "landing" || view === "generate" ? "secondary" : "ghost"} size="sm" onClick={() => setView("generate")}>
               <Sparkles className="w-4 h-4 mr-1" /> New
             </Button>
+            <Button variant={view === "agent" ? "secondary" : "ghost"} size="sm" onClick={() => setView("agent")}>
+              <BookOpen className="w-4 h-4 mr-1" /> Agent
+            </Button>
             <Button variant={view === "history" ? "secondary" : "ghost"} size="sm" onClick={() => setView("history")}>
               <History className="w-4 h-4 mr-1" /> History
             </Button>
@@ -392,6 +396,7 @@ export default function Home() {
         {view === "history" && <HistoryView books={books} onOpen={openBook} onRefresh={fetchBooks} onDelete={handleDeleteBook} />}
         {view === "dashboard" && <DashboardView books={books} />}
         {view === "cloud" && <CloudView />}
+        {view === "agent" && <EbookAgentView onOpenBook={openBook} />}
         {view === "auth" && (
           <AuthView
             onLogin={handleLogin}
