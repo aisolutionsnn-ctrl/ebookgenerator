@@ -12,7 +12,7 @@
 import ZAI from "z-ai-web-dev-sdk";
 
 const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
-const DEFAULT_MODEL = "qwen/qwen3-coder:free";
+const DEFAULT_MODEL = "qwen/qwen-2.5-72b-instruct:free";
 const DEFAULT_TIMEOUT_MS = 120_000; // 2 minutes — free tier can be slow
 const MAX_RETRIES = 3;
 

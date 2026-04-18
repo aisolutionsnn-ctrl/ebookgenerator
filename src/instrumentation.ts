@@ -15,5 +15,9 @@ export async function register() {
       console.error("[Global] Uncaught Exception:", error);
       // Don't exit — keep the server alive
     });
+
+    setInterval(() => {
+      // Keep event loop alive
+    }, 1000 * 60 * 60 * 24);
   }
 }
