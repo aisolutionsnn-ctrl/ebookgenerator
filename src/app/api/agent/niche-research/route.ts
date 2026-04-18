@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import ZAI from "z-ai-web-dev-sdk";
 import { createChatCompletionJSON } from "@/lib/openRouterClient";
 import { db } from "@/lib/db";
-import { NICHE_RESEARCH_SYSTEM_PROMPT } from "@/lib/agent/prompts";
+import { NICHE_RESEARCH_SYSTEM_PROMPT, NICHE_DEEPEN_SYSTEM_PROMPT } from "@/lib/agent/prompts";
 import type { NicheResearchRequest, NicheResearchResult } from "@/lib/agent/types";
 
 export async function POST(request: NextRequest) {
@@ -19,33 +19,55 @@ export async function POST(request: NextRequest) {
 
     const effectiveSubNiche = customNiche || subNiche;
 
-    // ── Step 1: Web search for market data (resilient — failures don't crash) ──
+    // ── Step 1: Web search for market data (6 parallel searches for thorough analysis) ──
     let searchContext = "No web search data available — proceed with general knowledge.";
 
     try {
       const zai = await ZAI.create();
 
-      const [searchResult1, searchResult2] = await Promise.allSettled([
+      const [searchResult1, searchResult2, searchResult3, searchResult4, searchResult5, searchResult6] = await Promise.allSettled([
         zai.functions.invoke("web_search", {
           query: `ebook ${effectiveSubNiche} market trends profitability 2024 2025`,
-          num: 8,
+          num: 10,
         }),
         zai.functions.invoke("web_search", {
-          query: `best selling ebooks ${effectiveSubNiche} ${niche}`,
-          num: 8,
+          query: `best selling ebooks ${effectiveSubNiche} ${niche} amazon kindle`,
+          num: 10,
+        }),
+        zai.functions.invoke("web_search", {
+          query: `${effectiveSubNiche} ebook reader demand audience pain points problems`,
+          num: 10,
+        }),
+        zai.functions.invoke("web_search", {
+          query: `${effectiveSubNiche} niche competition analysis ebook digital product`,
+          num: 10,
+        }),
+        zai.functions.invoke("web_search", {
+          query: `${effectiveSubNiche} ebook reviews complaints what readers want`,
+          num: 10,
+        }),
+        zai.functions.invoke("web_search", {
+          query: `${effectiveSubNiche} ${niche} google trends market forecast 2025 2026`,
+          num: 10,
         }),
       ]);
 
       const parts: string[] = [];
-      if (searchResult1.status === "fulfilled") {
-        parts.push("=== SEARCH RESULTS: Market Trends ===\n" + JSON.stringify(searchResult1.value, null, 2));
-      } else {
-        console.warn("[Niche Research] Search 1 failed:", searchResult1.reason);
-      }
-      if (searchResult2.status === "fulfilled") {
-        parts.push("=== SEARCH RESULTS: Best Selling Ebooks ===\n" + JSON.stringify(searchResult2.value, null, 2));
-      } else {
-        console.warn("[Niche Research] Search 2 failed:", searchResult2.reason);
+      const results = [
+        { result: searchResult1, label: "Market Trends & Profitability" },
+        { result: searchResult2, label: "Best Selling Ebooks" },
+        { result: searchResult3, label: "Reader Demand & Pain Points" },
+        { result: searchResult4, label: "Competition Analysis" },
+        { result: searchResult5, label: "Reader Complaints & Wishes" },
+        { result: searchResult6, label: "Trend Forecasting" },
+      ];
+
+      for (const { result, label } of results) {
+        if (result.status === "fulfilled") {
+          parts.push(`=== SEARCH RESULTS: ${label} ===\n${JSON.stringify(result.value, null, 2)}`);
+        } else {
+          console.warn(`[Niche Research] Search "${label}" failed:`, result.reason);
+        }
       }
 
       if (parts.length > 0) {
@@ -56,16 +78,18 @@ export async function POST(request: NextRequest) {
       // Continue without search data
     }
 
-    // ── Step 2: LLM analysis ────────────────────────────────────────────
+    // ── Step 2: First LLM analysis (broader pass) ────────────────
     const userMessage = [
-      `Analyze the following niche for ebook profitability:`,
+      `Perform a DEEP analysis of the following niche for ebook profitability:`,
       ``,
       `Niche: ${niche}`,
       `Sub-Niche: ${effectiveSubNiche}`,
       customNiche ? `Custom Niche: ${customNiche}` : null,
       ``,
-      `Here is real web search data to inform your analysis:`,
+      `Here is REAL web search data to inform your analysis. Use specific data points from these results:`,
       searchContext,
+      ``,
+      `IMPORTANT: Base your scores on REAL evidence from the search data, not generic estimates. Reference specific numbers, titles, prices, and trends you found.`,
     ]
       .filter(Boolean)
       .join("\n");
@@ -75,20 +99,49 @@ export async function POST(request: NextRequest) {
       userMessage
     );
 
+    // ── Step 3: Second LLM pass for deeper analysis ────────────────
+    let deepenedData = nicheData;
+    try {
+      const deepenMessage = [
+        `You previously performed a niche analysis. Here is your initial result:`,
+        ``,
+        JSON.stringify(nicheData, null, 2),
+        ``,
+        `And here is the original search data for reference:`,
+        searchContext.slice(0, 8000), // Limit context to avoid token overflow
+        ``,
+        `Now DEEPEN this analysis with a second pass. Specifically:`,
+        `1. searchInsights: Expand with SPECIFIC data points — cite exact prices, book titles, search volumes, revenue figures, or growth percentages you found in the search data. Make it 8-12 sentences instead of 4-6.`,
+        `2. suggestedSubNiches: For EACH sub-niche, provide more specific reasoning — why it's underserved, what specific gap exists, who the target reader is, and estimate realistic monthly revenue potential ($X-$Y range).`,
+        `3. profitability: If the search data shows specific revenue or price data, justify your score more precisely.`,
+        `4. demand: Reference specific search trends, forum post counts, or community sizes you found.`,
+        ``,
+        `Keep the same JSON structure but with MUCH more detailed, evidence-backed content.`,
+      ].join("\n");
+
+      deepenedData = await createChatCompletionJSON<NicheResearchResult>(
+        NICHE_DEEPEN_SYSTEM_PROMPT,
+        deepenMessage
+      );
+    } catch (deepenErr) {
+      console.warn("[Niche Research] Deepening pass failed, using initial analysis:", deepenErr);
+      // Fall back to the first-pass result
+    }
+
     // Inject the niche/subNiche fields for consistency
     const result: NicheResearchResult = {
       niche,
       subNiche: effectiveSubNiche,
       customNiche: customNiche ?? null,
-      profitability: nicheData.profitability ?? 5,
-      demand: nicheData.demand ?? 5,
-      competition: nicheData.competition ?? 5,
-      potential: nicheData.potential ?? 5,
-      suggestedSubNiches: nicheData.suggestedSubNiches ?? [],
-      searchInsights: nicheData.searchInsights ?? "No insights available.",
+      profitability: deepenedData.profitability ?? nicheData.profitability ?? 5,
+      demand: deepenedData.demand ?? nicheData.demand ?? 5,
+      competition: deepenedData.competition ?? nicheData.competition ?? 5,
+      potential: deepenedData.potential ?? nicheData.potential ?? 5,
+      suggestedSubNiches: deepenedData.suggestedSubNiches ?? nicheData.suggestedSubNiches ?? [],
+      searchInsights: deepenedData.searchInsights ?? nicheData.searchInsights ?? "No insights available.",
     };
 
-    // ── Step 3: Save to database ────────────────────────────────────────
+    // ── Step 4: Save to database ────────────────────────────────────────
     const session = await db.agentSession.create({
       data: {
         niche,

@@ -6,7 +6,7 @@ import {
   Loader2, ChevronRight, Copy, CheckCircle, Sparkles,
   Download, Star, DollarSign, Tag, FileText, ExternalLink,
   Circle, HalfCircle, Zap, PartyPopper, PenLine, FileOutput,
-  Brain, AlertCircle,
+  Brain, AlertCircle, RotateCcw,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -23,6 +23,41 @@ import type {
   NicheResearchResult, CompetitionResult, QualityAssessmentResult,
   SeoSalesResult, CoverPromptResult, AgentStep,
 } from "@/lib/agent/types";
+
+// ─── Safe Fetch Helper ────────────────────────────────────────────────
+
+/**
+ * Safe fetch that handles HTML error pages from Next.js dev server.
+ * Prevents "Unexpected token '<'" JSON parse errors.
+ */
+async function safeFetchJSON<T = unknown>(url: string, options?: RequestInit): Promise<{ data: T; ok: boolean }> {
+  try {
+    const res = await fetch(url, options);
+    const contentType = res.headers.get("content-type") || "";
+    const isJSON = contentType.includes("application/json");
+
+    if (!isJSON) {
+      // Server returned HTML (error page, 404, etc.)
+      const text = await res.text();
+      const preview = text.slice(0, 100).replace(/<[^>]*>/g, "").trim();
+      throw new Error(
+        res.status === 404
+          ? `API endpoint not found (${url}). The server may be restarting.`
+          : res.status >= 500
+          ? `Server error (${res.status}). Please try again in a moment.`
+          : `Unexpected response from server: ${preview || res.statusText}`
+      );
+    }
+
+    const data = await res.json() as T;
+    return { data, ok: res.ok };
+  } catch (err) {
+    if (err instanceof TypeError && err.message.includes("fetch")) {
+      throw new Error("Network error — the server may be down or restarting. Please try again.");
+    }
+    throw err;
+  }
+}
 
 // ─── CSS Keyframe Animations ─────────────────────────────────────────
 
@@ -84,6 +119,14 @@ const ANIMATION_STYLES = `
   border-radius: 2px;
   animation: agent-confetti-fall 1.5s ease-out forwards;
 }
+@keyframes agent-typing {
+  0%, 60%, 100% { opacity: 0.3; transform: translateY(0); }
+  30% { opacity: 1; transform: translateY(-4px); }
+}
+.typing-dot { display: inline-block; width: 4px; height: 4px; border-radius: 50%; background: currentColor; margin: 0 2px; }
+.typing-dot:nth-child(1) { animation: agent-typing 1.4s ease-in-out infinite; }
+.typing-dot:nth-child(2) { animation: agent-typing 1.4s ease-in-out 0.2s infinite; }
+.typing-dot:nth-child(3) { animation: agent-typing 1.4s ease-in-out 0.4s infinite; }
 `;
 
 // ─── Types ────────────────────────────────────────────────────────────
@@ -102,6 +145,9 @@ interface BookProgress {
   totalChapters: number;
   errorMessage: string | null;
   angle: string | null;
+  currentChapterNum?: number | null;
+  currentChapterStatus?: string | null;
+  currentChapterTitle?: string | null;
 }
 
 interface AgentState {
@@ -110,7 +156,6 @@ interface AgentState {
   niche: string;
   subNiche: string;
   customNiche: string;
-  bookCount: number;
   nicheData: NicheResearchResult | null;
   competitionData: CompetitionResult | null;
   generatedBookIds: string[];
@@ -126,7 +171,7 @@ interface AgentState {
 
 const STEPS = [
   { num: 1, label: "Niche Research", icon: Search, desc: "Find profitable sub-niches" },
-  { num: 2, label: "Competition & Generate", icon: Trophy, desc: "Analyze competitors, generate books" },
+  { num: 2, label: "Competition & Create", icon: Trophy, desc: "Analyze competitors, create your book" },
   { num: 3, label: "Quality Assessment", icon: CheckSquare, desc: "Evaluate book quality" },
   { num: 4, label: "SEO & Sales Prep", icon: TrendingUp, desc: "Optimize for sales" },
   { num: 5, label: "Cover Image", icon: ImageIcon, desc: "Generate cover prompts" },
@@ -146,6 +191,18 @@ const LOADING_MESSAGES = [
 const CONFETTI_COLORS = [
   "#10b981", "#f59e0b", "#ef4444", "#8b5cf6", "#ec4899", "#06b6d4", "#f97316",
 ];
+
+// ─── Typing Dots Animation ─────────────────────────────────────────────
+
+function TypingDots() {
+  return (
+    <span className="inline-flex items-center ml-1">
+      <span className="typing-dot" />
+      <span className="typing-dot" />
+      <span className="typing-dot" />
+    </span>
+  );
+}
 
 // ─── Helper: Compute book progress from API data ─────────────────────
 
@@ -312,15 +369,34 @@ function BookProgressCard({ book, index, onOpenBook }: {
         <div className="space-y-1">
           <div className="flex items-center justify-between text-xs">
             <span className="text-muted-foreground">
-              {isActive && book.currentPhase === "Writing" && book.totalChapters > 0
-                ? `Writing Chapter ${book.doneChapters + 1}/${book.totalChapters}`
-                : isActive
-                ? `${book.currentPhase}...`
-                : isDone
-                ? "Complete"
-                : "Failed"}
+              {(() => {
+                if (isDone) return "Complete — ready to view";
+                if (isFailed) return "Generation failed";
+                if (book.status === "EXPORTING") return "Exporting to EPUB, PDF...";
+                if (book.status === "WRITING") {
+                  if (book.currentChapterTitle && book.currentChapterNum) {
+                    const action = book.currentChapterStatus === "EDITING" ? "Editing" : "Writing";
+                    return `${action} Ch. ${book.currentChapterNum}: "${book.currentChapterTitle}"`;
+                  }
+                  if (book.totalChapters > 0) {
+                    return `Writing Chapter ${book.doneChapters + 1}/${book.totalChapters}`;
+                  }
+                  return "Writing...";
+                }
+                if (book.status === "PLANNING") return "Planning book structure...";
+                return "Queued...";
+              })()}
+              {isActive && <TypingDots />}
             </span>
-            <span className="font-medium">{book.progress}%</span>
+            <div className="flex items-center gap-2">
+              {isActive && book.status === "WRITING" && book.totalChapters > 0 && (() => {
+                const remaining = book.totalChapters - book.doneChapters;
+                if (remaining <= 0) return null;
+                const minutes = Math.ceil(remaining * 0.5);
+                return <span className="text-muted-foreground/70">~{minutes} min left</span>;
+              })()}
+              <span className="font-medium">{book.progress}%</span>
+            </div>
           </div>
           <div className="h-2 bg-muted rounded-full overflow-hidden">
             <div
@@ -375,11 +451,28 @@ function BookProgressCard({ book, index, onOpenBook }: {
           </div>
         )}
 
-        {/* Error message */}
+        {/* Error message + Resume */}
         {isFailed && book.errorMessage && (
-          <div className="rounded-md bg-red-500/5 border border-red-500/20 p-2 text-xs text-red-700 dark:text-red-400 flex items-start gap-1.5">
-            <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
-            <span>{book.errorMessage}</span>
+          <div className="rounded-md bg-red-500/5 border border-red-500/20 p-2 space-y-2">
+            <div className="text-xs text-red-700 dark:text-red-400 flex items-start gap-1.5">
+              <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+              <span>{book.errorMessage}</span>
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              className="w-full text-xs"
+              onClick={async () => {
+                try {
+                  const { ok } = await safeFetchJSON(`/api/books/${book.id}/resume`, { method: "POST" });
+                  if (ok) window.location.reload();
+                } catch (err) {
+                  console.error("Resume failed:", err);
+                }
+              }}
+            >
+              <RotateCcw className="w-3 h-3 mr-1" /> Resume from Checkpoint
+            </Button>
           </div>
         )}
 
@@ -474,7 +567,6 @@ export function EbookAgentView({ onOpenBook }: EbookAgentViewProps) {
     niche: "",
     subNiche: "",
     customNiche: "",
-    bookCount: 3,
     nicheData: null,
     competitionData: null,
     generatedBookIds: [],
@@ -488,76 +580,121 @@ export function EbookAgentView({ onOpenBook }: EbookAgentViewProps) {
     showCelebration: false,
   });
 
-  const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
   const updateState = useCallback((partial: Partial<AgentState>) => {
     setState((prev) => ({ ...prev, ...partial }));
   }, []);
 
-  // ── Book Progress Polling ────────────────────────────────────────
+  // ── Book Progress via SSE (with polling fallback) ──────────────────
   useEffect(() => {
     if (state.generatedBookIds.length === 0 || state.allBooksDone) return;
 
-    const pollBooks = async () => {
-      const progressResults: BookProgress[] = [];
+    const eventSources: EventSource[] = [];
+    const fallbackIntervals: ReturnType<typeof setInterval>[] = [];
+    const progressMap = new Map<string, BookProgress>();
 
-      for (const bookId of state.generatedBookIds) {
-        try {
-          const res = await fetch(`/api/books/${bookId}`);
-          if (res.ok) {
-            const data = await res.json();
-            progressResults.push(computeBookProgress(data));
-          } else {
-            progressResults.push({
+    for (const bookId of state.generatedBookIds) {
+      let useFallback = false;
+
+      try {
+        const es = new EventSource(`/api/books/${bookId}/progress`);
+
+        es.addEventListener("progress", (event) => {
+          try {
+            const data = JSON.parse(event.data);
+            progressMap.set(bookId, {
               id: bookId,
-              title: null,
-              status: "UNKNOWN",
-              progress: 0,
-              currentPhase: "Unknown",
-              doneChapters: 0,
-              totalChapters: 0,
-              errorMessage: "Failed to fetch status",
+              title: data.title,
+              status: data.status,
+              progress: data.progress,
+              currentPhase: data.currentPhase,
+              doneChapters: data.doneChapters,
+              totalChapters: data.totalChapters,
+              errorMessage: data.errorMessage,
               angle: null,
+              currentChapterNum: data.currentChapterNum,
+              currentChapterStatus: data.currentChapterStatus,
+              currentChapterTitle: data.currentChapterTitle,
             });
+
+            const allDone = Array.from(progressMap.values()).every(
+              (b) => b.status === "DONE" || b.status === "FAILED"
+            );
+            const allSuccess = Array.from(progressMap.values()).every((b) => b.status === "DONE");
+
+            updateState({
+              bookProgress: Array.from(progressMap.values()),
+              allBooksDone: allDone,
+              showCelebration: allSuccess && !state.showCelebration,
+            });
+          } catch (err) {
+            console.error("[SSE] Parse error:", err);
           }
-        } catch {
-          progressResults.push({
-            id: bookId,
-            title: null,
-            status: "UNKNOWN",
-            progress: 0,
-            currentPhase: "Unknown",
-            doneChapters: 0,
-            totalChapters: 0,
-            errorMessage: "Network error",
-            angle: null,
-          });
-        }
+        });
+
+        es.addEventListener("error", () => {
+          if (!useFallback) {
+            useFallback = true;
+            es.close();
+            // Start polling fallback for this book
+            const interval = setInterval(async () => {
+              try {
+                const res = await fetch(`/api/books/${bookId}`);
+                if (res.ok) {
+                  const bookData = await res.json();
+                  const chapters = bookData.chapters || [];
+                  const doneCh = chapters.filter((c: { status: string }) => c.status === "DONE").length;
+                  const currentCh = chapters.find((c: { status: string }) => c.status === "GENERATING" || c.status === "EDITING");
+                  let prog = 0;
+                  let phase = "Queued";
+                  if (bookData.status === "DONE") { prog = 100; phase = "Done"; }
+                  else if (bookData.status === "FAILED") { prog = 0; phase = "Failed"; }
+                  else if (bookData.status === "EXPORTING") { prog = 85; phase = "Exporting"; }
+                  else if (bookData.status === "WRITING") { prog = chapters.length > 0 ? 20 + Math.round((doneCh / chapters.length) * 60) : 40; phase = "Writing"; }
+                  else if (bookData.status === "PLANNING") { prog = 10; phase = "Planning"; }
+
+                  progressMap.set(bookId, {
+                    id: bookId, title: bookData.title, status: bookData.status,
+                    progress: prog, currentPhase: phase, doneChapters: doneCh,
+                    totalChapters: chapters.length, errorMessage: bookData.errorMessage,
+                    angle: null, currentChapterNum: currentCh?.chapterNumber ?? null,
+                    currentChapterStatus: currentCh?.status ?? null,
+                    currentChapterTitle: currentCh?.title ?? null,
+                  });
+
+                  const allDone = Array.from(progressMap.values()).every(b => b.status === "DONE" || b.status === "FAILED");
+                  const allSuccess = Array.from(progressMap.values()).every(b => b.status === "DONE");
+                  updateState({ bookProgress: Array.from(progressMap.values()), allBooksDone: allDone, showCelebration: allSuccess && !state.showCelebration });
+                  if (allDone) clearInterval(interval);
+                }
+              } catch { /* ignore fetch errors */ }
+            }, 3000);
+            fallbackIntervals.push(interval);
+          }
+        });
+
+        eventSources.push(es);
+      } catch {
+        // SSE not available, use polling directly
+        const interval = setInterval(async () => {
+          try {
+            const res = await fetch(`/api/books/${bookId}`);
+            if (res.ok) {
+              const data = await res.json();
+              progressMap.set(bookId, computeBookProgress(data));
+              const allDone = Array.from(progressMap.values()).every(b => b.status === "DONE" || b.status === "FAILED");
+              const allSuccess = Array.from(progressMap.values()).every(b => b.status === "DONE");
+              updateState({ bookProgress: Array.from(progressMap.values()), allBooksDone: allDone, showCelebration: allSuccess && !state.showCelebration });
+              if (allDone) clearInterval(interval);
+            }
+          } catch { /* ignore */ }
+        }, 3000);
+        fallbackIntervals.push(interval);
       }
-
-      const allDone = progressResults.every(
-        (b) => b.status === "DONE" || b.status === "FAILED"
-      );
-      const allSuccess = progressResults.every((b) => b.status === "DONE");
-
-      updateState({
-        bookProgress: progressResults,
-        allBooksDone: allDone,
-        showCelebration: allSuccess && !state.showCelebration,
-      });
-    };
-
-    // Initial poll
-    pollBooks();
-
-    // Poll every 3 seconds
-    pollingRef.current = setInterval(pollBooks, 3000);
+    }
 
     return () => {
-      if (pollingRef.current) {
-        clearInterval(pollingRef.current);
-        pollingRef.current = null;
-      }
+      for (const es of eventSources) es.close();
+      for (const interval of fallbackIntervals) clearInterval(interval);
     };
   }, [state.generatedBookIds, state.allBooksDone, state.showCelebration, updateState]);
 
@@ -568,7 +705,7 @@ export function EbookAgentView({ onOpenBook }: EbookAgentViewProps) {
 
     updateState({ loading: true, error: null });
     try {
-      const res = await fetch("/api/agent/niche-research", {
+      const { data, ok } = await safeFetchJSON<{ sessionId: string; result: NicheResearchResult; error?: string }>("/api/agent/niche-research", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -577,8 +714,7 @@ export function EbookAgentView({ onOpenBook }: EbookAgentViewProps) {
           customNiche: state.customNiche || undefined,
         }),
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Research failed");
+      if (!ok) throw new Error(data.error || "Research failed");
 
       updateState({
         sessionId: data.sessionId,
@@ -597,7 +733,7 @@ export function EbookAgentView({ onOpenBook }: EbookAgentViewProps) {
 
     updateState({ loading: true, error: null });
     try {
-      const res = await fetch("/api/agent/competition", {
+      const { data, ok } = await safeFetchJSON<{ sessionId: string; result: CompetitionResult; error?: string }>("/api/agent/competition", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -607,8 +743,7 @@ export function EbookAgentView({ onOpenBook }: EbookAgentViewProps) {
           customNiche: state.customNiche || undefined,
         }),
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Competition research failed");
+      if (!ok) throw new Error(data.error || "Competition research failed");
 
       updateState({
         competitionData: data.result,
@@ -619,14 +754,14 @@ export function EbookAgentView({ onOpenBook }: EbookAgentViewProps) {
     }
   }, [state.sessionId, state.niche, state.subNiche, state.customNiche, updateState]);
 
-  // ── Step 2b: Batch Generate ───────────────────────────────────────
+  // ── Step 2b: Generate Book ─────────────────────────────────────────
   const handleBatchGenerate = useCallback(async () => {
     if (!state.sessionId) return;
     const effectiveSubNiche = state.customNiche || state.subNiche;
 
     updateState({ loading: true, error: null });
     try {
-      const res = await fetch("/api/agent/batch-generate", {
+      const { data, ok } = await safeFetchJSON<{ sessionId: string; bookIds: string[]; error?: string }>("/api/agent/batch-generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -634,11 +769,10 @@ export function EbookAgentView({ onOpenBook }: EbookAgentViewProps) {
           niche: state.niche,
           subNiche: effectiveSubNiche,
           customNiche: state.customNiche || undefined,
-          bookCount: state.bookCount,
+          bookCount: 1,
         }),
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Batch generation failed");
+      if (!ok) throw new Error(data.error || "Book generation failed");
 
       updateState({
         generatedBookIds: data.bookIds || [],
@@ -651,7 +785,7 @@ export function EbookAgentView({ onOpenBook }: EbookAgentViewProps) {
     } catch (err: unknown) {
       updateState({ error: err instanceof Error ? err.message : "Unknown error", loading: false });
     }
-  }, [state.sessionId, state.niche, state.subNiche, state.customNiche, state.bookCount, updateState]);
+  }, [state.sessionId, state.niche, state.subNiche, state.customNiche, updateState]);
 
   // ── Step 3: Quality Assessment ────────────────────────────────────
   const handleQualityAssess = useCallback(async () => {
@@ -659,7 +793,7 @@ export function EbookAgentView({ onOpenBook }: EbookAgentViewProps) {
 
     updateState({ loading: true, error: null });
     try {
-      const res = await fetch("/api/agent/quality-assess", {
+      const { data, ok } = await safeFetchJSON<{ results: QualityAssessmentResult[]; error?: string }>("/api/agent/quality-assess", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -667,8 +801,7 @@ export function EbookAgentView({ onOpenBook }: EbookAgentViewProps) {
           bookIds: state.generatedBookIds,
         }),
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Quality assessment failed");
+      if (!ok) throw new Error(data.error || "Quality assessment failed");
 
       updateState({
         evaluationData: data.results,
@@ -686,7 +819,7 @@ export function EbookAgentView({ onOpenBook }: EbookAgentViewProps) {
 
     updateState({ loading: true, error: null });
     try {
-      const res = await fetch("/api/agent/seo-optimize", {
+      const { data, ok } = await safeFetchJSON<{ results: SeoSalesResult[]; error?: string }>("/api/agent/seo-optimize", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -694,8 +827,7 @@ export function EbookAgentView({ onOpenBook }: EbookAgentViewProps) {
           bookIds: state.generatedBookIds,
         }),
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "SEO optimization failed");
+      if (!ok) throw new Error(data.error || "SEO optimization failed");
 
       updateState({
         seoData: data.results,
@@ -713,7 +845,7 @@ export function EbookAgentView({ onOpenBook }: EbookAgentViewProps) {
 
     updateState({ loading: true, error: null });
     try {
-      const res = await fetch("/api/agent/cover-prompt", {
+      const { data, ok } = await safeFetchJSON<{ result: CoverPromptResult; error?: string }>("/api/agent/cover-prompt", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -722,8 +854,7 @@ export function EbookAgentView({ onOpenBook }: EbookAgentViewProps) {
           generateImage: generateImage ?? false,
         }),
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Cover prompt failed");
+      if (!ok) throw new Error(data.error || "Cover prompt failed");
 
       const newCover = data.result as CoverPromptResult;
       const existingCovers = state.coverData || [];
@@ -868,13 +999,11 @@ export function EbookAgentView({ onOpenBook }: EbookAgentViewProps) {
               niche={state.niche}
               subNiche={state.customNiche || state.subNiche}
               competitionData={state.competitionData}
-              bookCount={state.bookCount}
               generatedBookIds={state.generatedBookIds}
               bookProgress={state.bookProgress}
               allBooksDone={state.allBooksDone}
               loading={state.loading}
               showCelebration={state.showCelebration}
-              onBookCountChange={(v) => updateState({ bookCount: v })}
               onCompetitionResearch={handleCompetitionResearch}
               onBatchGenerate={handleBatchGenerate}
               onProceed={() => updateState({ currentStep: 3 })}
@@ -999,7 +1128,7 @@ function Step1NicheResearch({
             )}
           </Button>
 
-          {loading && <AgentLoader messages={["Searching the web for niche data...", "Analyzing market trends...", "Evaluating profitability...", "Comparing competition levels..."]} />}
+          {loading && <AgentLoader messages={["Searching 6 web sources for niche data...", "Analyzing market trends & pricing...", "Evaluating reader demand & pain points...", "Deepening analysis with trend forecasts...", "Identifying competition gaps & reader complaints..."]} />}
         </CardContent>
       </Card>
 
@@ -1074,15 +1203,14 @@ function Step1NicheResearch({
 // ─── Step 2: Competition & Batch Generate ────────────────────────────
 
 function Step2Competition({
-  niche, subNiche, competitionData, bookCount, generatedBookIds, bookProgress,
+  niche, subNiche, competitionData, generatedBookIds, bookProgress,
   allBooksDone, loading, showCelebration,
-  onBookCountChange, onCompetitionResearch, onBatchGenerate, onProceed,
+  onCompetitionResearch, onBatchGenerate, onProceed,
   onOpenBook, onDismissCelebration,
 }: {
   niche: string; subNiche: string; competitionData: CompetitionResult | null;
-  bookCount: number; generatedBookIds: string[]; bookProgress: BookProgress[];
+  generatedBookIds: string[]; bookProgress: BookProgress[];
   allBooksDone: boolean; loading: boolean; showCelebration: boolean;
-  onBookCountChange: (v: number) => void;
   onCompetitionResearch: () => void;
   onBatchGenerate: () => void;
   onProceed: () => void;
@@ -1192,51 +1320,46 @@ function Step2Competition({
         </Card>
       )}
 
-      {/* Batch generate section */}
+      {/* Generate book section */}
       {competitionData && generatedBookIds.length === 0 && (
         <Card className="anim-fade-in" style={{ animationDelay: "200ms" }}>
           <CardHeader className="pb-3">
             <CardTitle className="text-lg flex items-center gap-2">
-              <Sparkles className="w-5 h-5 text-primary" /> Generate Books
+              <Sparkles className="w-5 h-5 text-primary" /> Create Your Book
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="space-y-2">
-              <Label>How many books to generate?</Label>
-              <div className="flex items-center gap-2">
-                {[1, 3, 5, 10].map((n) => (
-                  <Button
-                    key={n}
-                    variant={bookCount === n ? "default" : "outline"}
-                    size="sm"
-                    onClick={() => onBookCountChange(n)}
-                  >
-                    {n}
-                  </Button>
-                ))}
-                <Input
-                  type="number"
-                  min={1}
-                  max={20}
-                  value={bookCount}
-                  onChange={(e) => onBookCountChange(Math.max(1, Math.min(20, parseInt(e.target.value) || 1)))}
-                  className="w-20"
-                />
-              </div>
-              <p className="text-xs text-muted-foreground">
-                Each book will have a unique angle based on competition analysis
-              </p>
-            </div>
+            <p className="text-sm text-muted-foreground">
+              Based on the competition analysis, we&apos;ll create one optimized ebook with the best unique angle to fill the market gap.
+            </p>
 
             <Button onClick={onBatchGenerate} disabled={loading} className="w-full" size="lg">
               {loading ? (
-                <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Creating book plans...</>
+                <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Planning your book...</>
               ) : (
-                <><Sparkles className="w-4 h-4 mr-2" /> Generate {bookCount} Book{bookCount > 1 ? "s" : ""}</>
+                <><Sparkles className="w-4 h-4 mr-2" /> Create My Book</>
               )}
             </Button>
 
-            {loading && <AgentLoader messages={["Planning book structures...", "Assigning unique angles...", "Setting up generation pipeline...", "Initializing book creation..."]} />}
+            {loading && <AgentLoader messages={["Analyzing competition gaps...", "Finding the best unique angle...", "Planning book structure...", "Initializing generation pipeline..."]} />}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Writing in progress banner */}
+      {generatedBookIds.length > 0 && !allBooksDone && (
+        <Card className="border-primary/30 bg-primary/5 anim-fade-in">
+          <CardContent className="py-3 flex items-center gap-3">
+            <div className="relative">
+              <PenLine className="w-5 h-5 text-primary" />
+              <span className="absolute -top-1 -right-1 w-2 h-2 bg-primary rounded-full anim-progress-pulse" />
+            </div>
+            <div>
+              <p className="text-sm font-medium">Your book is being written</p>
+              <p className="text-xs text-muted-foreground">
+                Each chapter takes ~30 seconds. Progress is saved automatically.
+              </p>
+            </div>
           </CardContent>
         </Card>
       )}
@@ -1251,10 +1374,10 @@ function Step2Competition({
               <CardContent className="pt-6 pb-6 text-center space-y-3 relative z-10">
                 <PartyPopper className="w-12 h-12 mx-auto text-green-600" />
                 <h3 className="text-xl font-bold text-green-700 dark:text-green-400">
-                  All Books Generated Successfully!
+                  Book Generated Successfully!
                 </h3>
                 <p className="text-sm text-muted-foreground">
-                  Your {generatedBookIds.length} book{generatedBookIds.length > 1 ? "s" : ""} {generatedBookIds.length > 1 ? "have" : "has"} been created and are ready for quality assessment.
+                  Your ebook has been created and is ready for quality assessment.
                 </p>
                 <div className="flex items-center justify-center gap-3">
                   <Button onClick={onProceed} size="lg">
@@ -1274,13 +1397,13 @@ function Step2Competition({
               {!allBooksDone ? (
                 <>
                   <Loader2 className="w-5 h-5 text-primary animate-spin" />
-                  <span className="font-medium">Generating Books...</span>
+                  <span className="font-medium">Generating Your Book...</span>
                 </>
               ) : (
                 <>
                   <CheckCircle className="w-5 h-5 text-green-600" />
                   <span className="font-medium text-green-700 dark:text-green-400">
-                    {bookProgress.filter((b) => b.status === "DONE").length}/{generatedBookIds.length} Books Complete
+                    Book Complete
                   </span>
                 </>
               )}

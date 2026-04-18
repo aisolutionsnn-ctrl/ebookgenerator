@@ -33,17 +33,20 @@ export async function GET(
       return NextResponse.json({ error: "Book not found." }, { status: 404 });
     }
 
-    // Auto-detect stale books: if stuck in PLANNING for >3min or WRITING/EXPORTING for >15min, mark as FAILED
-    const PLANNING_STALE_MS = 3 * 60 * 1000; // 3 minutes for planning
-    const WRITING_STALE_MS = 15 * 60 * 1000; // 15 minutes for writing/exporting
-    const STALE_THRESHOLD_MS = book.status === "PLANNING" ? PLANNING_STALE_MS : WRITING_STALE_MS;
+    // Auto-detect stale books: if stuck for too long, mark as FAILED
+    // Uses updatedAt (not createdAt) so books that were recently resumed aren't falsely marked stale
+    // Writing an 8-12 chapter book can legitimately take 15-30 minutes
+    const PLANNING_STALE_MS = 15 * 60 * 1000; // 15 minutes for planning (includes metadata generation)
+    const WRITING_STALE_MS = 60 * 60 * 1000;  // 60 minutes for writing (8-12 chapters × ~3min each)
+    const EXPORTING_STALE_MS = 10 * 60 * 1000; // 10 minutes for exporting
+    const STALE_THRESHOLD_MS = book.status === "PLANNING" ? PLANNING_STALE_MS : book.status === "EXPORTING" ? EXPORTING_STALE_MS : WRITING_STALE_MS;
     const activeStatuses = ["PLANNING", "WRITING", "EXPORTING"];
     if (activeStatuses.includes(book.status)) {
-      const age = Date.now() - new Date(book.createdAt).getTime();
-      if (age > STALE_THRESHOLD_MS && !book.completedAt) {
+      const idleTime = Date.now() - new Date(book.updatedAt).getTime();
+      if (idleTime > STALE_THRESHOLD_MS && !book.completedAt) {
         const stuckStatus = book.status;
-        const errorMsg = `Generation timed out — stuck in ${stuckStatus} for over 10 minutes. Click "Resume from Checkpoint" to retry.`;
-        console.warn(`[API] Book ${book.id} stuck in ${stuckStatus} for ${Math.round(age / 60000)}min, marking as FAILED`);
+        const errorMsg = `Generation timed out — stuck in ${stuckStatus} with no progress for over ${Math.round(idleTime / 60000)} minutes. Click "Resume from Checkpoint" to retry.`;
+        console.warn(`[API] Book ${book.id} stuck in ${stuckStatus} for ${Math.round(idleTime / 60000)}min (no update since ${book.updatedAt.toISOString()}), marking as FAILED`);
         await db.book.update({
           where: { id: book.id },
           data: { status: "FAILED", errorMessage: errorMsg },
@@ -79,6 +82,7 @@ export async function GET(
       mobiPath: book.mobiPath,
       coverImagePath: book.coverImagePath,
       createdAt: book.createdAt,
+      updatedAt: book.updatedAt,
       completedAt: book.completedAt,
       chapters: book.chapters.map((ch) => ({
         id: ch.id,

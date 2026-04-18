@@ -66,6 +66,7 @@ export interface SyncBookData {
   pdfTemplate: string;
   coverImagePath: string | null;
   createdAt: string;
+  updatedAt: string;
   completedAt: string | null;
 }
 
@@ -93,6 +94,7 @@ function bookToRow(b: SyncBookData): Record<string, unknown> {
     pdf_template: b.pdfTemplate,
     cover_image_path: b.coverImagePath,
     created_at: b.createdAt,
+    updated_at: b.updatedAt,
     completed_at: b.completedAt,
   };
 }
@@ -121,6 +123,7 @@ function rowToBook(row: Record<string, unknown>): SyncBookData {
     pdfTemplate: (row.pdf_template as string) ?? "professional",
     coverImagePath: (row.cover_image_path as string) ?? null,
     createdAt: row.created_at as string,
+    updatedAt: (row.updated_at as string) ?? new Date().toISOString(),
     completedAt: (row.completed_at as string) ?? null,
   };
 }
@@ -606,6 +609,7 @@ export async function pushAllToCloud(): Promise<{
         pdfTemplate: book.pdfTemplate,
         coverImagePath: book.coverImagePath,
         createdAt: book.createdAt.toISOString(),
+        updatedAt: book.updatedAt.toISOString(),
         completedAt: book.completedAt?.toISOString() ?? null,
       });
       if (bookOk) booksSynced++;

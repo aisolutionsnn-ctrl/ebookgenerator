@@ -40,7 +40,7 @@ import { syncBookToCloud, syncChapterToCloud, syncBookFilesToCloud, type SyncBoo
 // ─── Config ───────────────────────────────────────────────────────────
 
 /** Delay between LLM calls to avoid rate limits (ms) */
-const INTER_CALL_DELAY = 8_000;
+const INTER_CALL_DELAY = 3_000;
 
 // ─── Types ────────────────────────────────────────────────────────────
 
@@ -166,6 +166,9 @@ async function runBookPipeline(bookId: string): Promise<void> {
         }
       }
 
+      // Touch book to indicate planning phase made progress
+      await touchBook(bookId);
+
       // T19: Auto-generate metadata
       try {
         const metadata = await generateBookMetadata(
@@ -265,6 +268,9 @@ async function runBookPipeline(bookId: string): Promise<void> {
           },
         });
 
+        // Touch book to indicate chapter completed — prevents stale detection
+        await touchBook(bookId);
+
         // Auto-sync: push updated chapter to Supabase
         const updatedChapter = await db.chapter.findFirst({ where: { bookId, chapterNumber: chapterNum } });
         if (updatedChapter) {
@@ -296,6 +302,7 @@ async function runBookPipeline(bookId: string): Promise<void> {
     // ── Phase 3: Exporting ─────────────────────────────────
     await updatePhases(bookId, { planning: true, writing: true, exporting: true });
     await updateStatus(bookId, "EXPORTING");
+    // touchBook already called by updatePhases + updateStatus
 
     const allChapters = await db.chapter.findMany({
       where: { bookId },
@@ -414,17 +421,26 @@ async function runBookPipeline(bookId: string): Promise<void> {
 
 // ─── Helpers ──────────────────────────────────────────────────────────
 
+/** Update the book's updatedAt timestamp to indicate progress is being made.
+ *  This prevents the stale-book detector from falsely marking active books as FAILED. */
+async function touchBook(bookId: string): Promise<void> {
+  await db.book.update({
+    where: { id: bookId },
+    data: { updatedAt: new Date() },
+  });
+}
+
 async function updatePhases(bookId: string, phases: Phases): Promise<void> {
   await db.book.update({
     where: { id: bookId },
-    data: { phasesJson: JSON.stringify(phases) },
+    data: { phasesJson: JSON.stringify(phases), updatedAt: new Date() },
   });
 }
 
 async function updateStatus(bookId: string, status: string): Promise<void> {
   await db.book.update({
     where: { id: bookId },
-    data: { status },
+    data: { status, updatedAt: new Date() },
   });
 }
 
@@ -453,6 +469,7 @@ function buildSyncBook(book: {
   pdfTemplate: string;
   coverImagePath: string | null;
   createdAt: Date;
+  updatedAt: Date;
   completedAt: Date | null;
 }): SyncBookData {
   return {
@@ -477,6 +494,7 @@ function buildSyncBook(book: {
     pdfTemplate: book.pdfTemplate,
     coverImagePath: book.coverImagePath,
     createdAt: book.createdAt.toISOString(),
+    updatedAt: book.updatedAt.toISOString(),
     completedAt: book.completedAt?.toISOString() ?? null,
   };
 }

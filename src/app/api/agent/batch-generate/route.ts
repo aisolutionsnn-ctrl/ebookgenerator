@@ -19,18 +19,11 @@ interface BatchAnglesResult {
 export async function POST(request: NextRequest) {
   try {
     const body: BatchGenerateApiRequest = await request.json();
-    const { sessionId, niche, subNiche, customNiche, bookCount } = body;
+    const { sessionId, niche, subNiche, customNiche } = body;
 
-    if (!sessionId || !niche || !subNiche || !bookCount) {
+    if (!sessionId || !niche || !subNiche) {
       return NextResponse.json(
-        { error: "Missing required fields: sessionId, niche, subNiche, bookCount" },
-        { status: 400 }
-      );
-    }
-
-    if (bookCount < 1 || bookCount > 10) {
-      return NextResponse.json(
-        { error: "bookCount must be between 1 and 10" },
+        { error: "Missing required fields: sessionId, niche, subNiche" },
         { status: 400 }
       );
     }
@@ -49,21 +42,20 @@ export async function POST(request: NextRequest) {
 
     if (!session.competitionDataJson) {
       return NextResponse.json(
-        { error: "Competition research must be completed before batch generation" },
+        { error: "Competition research must be completed before generating a book" },
         { status: 400 }
       );
     }
 
     const competitionData: CompetitionResult = JSON.parse(session.competitionDataJson);
 
-    // ── Step 2: Generate unique angles for each book ────────────────────
+    // ── Step 2: Generate the best unique angle for ONE book ────────────────
     const userMessage = [
-      `Generate ${bookCount} unique ebook angles for the following niche:`,
+      `Generate the SINGLE BEST ebook angle for the following niche:`,
       ``,
       `Niche: ${niche}`,
       `Sub-Niche: ${subNiche}`,
       customNiche ? `Custom Niche: ${customNiche}` : null,
-      `Number of books to generate: ${bookCount}`,
       ``,
       `Competition analysis summary:`,
       `- Average price: ${competitionData.averagePrice}`,
@@ -73,7 +65,7 @@ export async function POST(request: NextRequest) {
       `- Market gaps: ${competitionData.marketGaps.join("; ")}`,
       `- Suggested angles from competition research: ${competitionData.suggestedAngles.join("; ")}`,
       ``,
-      `Each book should target a DIFFERENT angle so they don't compete with each other.`,
+      `Find the MOST unique and profitable angle that fills a real gap in the market. The book must stand out from ALL competitors.`,
     ]
       .filter(Boolean)
       .join("\n");
@@ -92,59 +84,51 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Trim to the requested count in case the LLM returned more
-    const selectedBooks = books.slice(0, bookCount);
+    // Take only the first (best) angle
+    const bestAngle = books[0];
 
-    // ── Step 3: Create Book records for each angle ──────────────────────
-    const createdBooks = await Promise.all(
-      selectedBooks.map((angle) =>
-        db.book.create({
-          data: {
-            prompt: `Write a comprehensive ebook about ${angle.title}. ${angle.differentiator}. Target audience: ${angle.targetAudience}. Niche: ${subNiche}`,
-            audience: angle.targetAudience,
-            tone: "Informative and engaging",
-            lengthHint: "Medium (8-12 chapters)",
-            language: "en",
-            pdfTemplate: "professional",
-            status: "PLANNING",
-            userId: session.userId,
-          },
-        })
-      )
-    );
+    // ── Step 3: Create ONE Book record ──────────────────────────────────
+    const createdBook = await db.book.create({
+      data: {
+        prompt: `Write a comprehensive ebook about ${bestAngle.title}. ${bestAngle.differentiator}. Target audience: ${bestAngle.targetAudience}. Niche: ${subNiche}`,
+        audience: bestAngle.targetAudience,
+        tone: "Informative and engaging",
+        lengthHint: "Medium (8-12 chapters)",
+        language: "en",
+        pdfTemplate: "professional",
+        status: "PLANNING",
+        userId: session.userId,
+      },
+    });
 
-    const bookIds = createdBooks.map((b) => b.id);
+    const bookIds = [createdBook.id];
 
-    // ── Step 4: Update session with generated book IDs ──────────────────
+    // ── Step 4: Update session ──────────────────────────────────────────
     await db.agentSession.update({
       where: { id: sessionId },
       data: {
         generatedBookIds: JSON.stringify(bookIds),
         currentStep: 2,
-        bookCount: bookIds.length,
+        bookCount: 1,
       },
     });
 
-    // ── Step 5: Enqueue each book into the generation pipeline ──────────
-    for (const book of createdBooks) {
-      enqueueBookJob(book.id);
-      // Small delay between enqueues to avoid overwhelming the system
-      await new Promise((resolve) => setTimeout(resolve, 500));
-    }
+    // ── Step 5: Enqueue the book into the generation pipeline ───────────
+    enqueueBookJob(createdBook.id);
 
     return NextResponse.json({
       sessionId,
       bookIds,
-      books: selectedBooks.map((angle, i) => ({
-        id: createdBooks[i].id,
-        angle: angle.angle,
-        title: angle.title,
-        targetAudience: angle.targetAudience,
-        differentiator: angle.differentiator,
-      })),
+      books: [{
+        id: createdBook.id,
+        angle: bestAngle.angle,
+        title: bestAngle.title,
+        targetAudience: bestAngle.targetAudience,
+        differentiator: bestAngle.differentiator,
+      }],
     });
   } catch (error) {
-    console.error("[Batch Generate API] Error:", error);
+    console.error("[Book Generate API] Error:", error);
     const message =
       error instanceof Error ? error.message : "An unexpected error occurred";
     return NextResponse.json({ error: message }, { status: 500 });

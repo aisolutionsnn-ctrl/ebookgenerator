@@ -1,9 +1,12 @@
 /**
  * POST /api/books/:id/resume
  *
- * Resume a failed book generation job.
+ * Resume a failed or stuck book generation job.
  * The pipeline will skip already-completed phases/chapters
  * and continue from where it left off.
+ *
+ * Resumable statuses: FAILED, PLANNING, WRITING, EXPORTING
+ * (PLANNING/WRITING/EXPORTING books may be stuck after server restart)
  */
 
 import { NextRequest, NextResponse } from "next/server";
@@ -23,12 +26,21 @@ export async function POST(
       return NextResponse.json({ error: "Book not found." }, { status: 404 });
     }
 
-    if (book.status !== "FAILED") {
+    // Allow resuming FAILED or stuck books (stuck = still in active status after restart)
+    const resumableStatuses = ["FAILED", "PLANNING", "WRITING", "EXPORTING"];
+    if (!resumableStatuses.includes(book.status)) {
       return NextResponse.json(
-        { error: "Only failed books can be resumed. Current status: " + book.status },
+        { error: "Book cannot be resumed. Current status: " + book.status },
         { status: 400 }
       );
     }
+
+    // Reset stale chapter statuses before enqueuing
+    // Chapters in GENERATING/EDITING are mid-process and need to be retried
+    await db.chapter.updateMany({
+      where: { bookId: id, status: { in: ["GENERATING", "EDITING"] } },
+      data: { status: "PENDING" },
+    });
 
     // Re-enqueue the job — the pipeline will detect what's already done
     enqueueBookJob(book.id);

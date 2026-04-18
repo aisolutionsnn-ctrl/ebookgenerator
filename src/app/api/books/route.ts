@@ -102,6 +102,7 @@ export async function POST(request: NextRequest) {
       pdfTemplate: book.pdfTemplate,
       coverImagePath: book.coverImagePath,
       createdAt: book.createdAt.toISOString(),
+      updatedAt: book.updatedAt.toISOString(),
       completedAt: book.completedAt?.toISOString() ?? null,
     }).catch((err) => console.warn("[Sync] Book sync failed:", err));
 
