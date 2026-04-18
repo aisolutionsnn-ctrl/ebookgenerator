@@ -567,6 +567,11 @@ function BookProgress({
   const isFailed = book.status === "FAILED";
   const isActive = !isDone && !isFailed;
   const doneCount = book.chapters.filter((c) => c.status === "DONE").length;
+  const currentWritingChapter = book.chapters.find((c) => c.status === "GENERATING" || c.status === "EDITING");
+
+  // Time estimate for remaining chapters
+  const remainingChapters = book.chapters.filter((c) => c.status !== "DONE").length;
+  const estimatedMinutesLeft = remainingChapters > 0 ? Math.ceil(remainingChapters * 1.5) : 0;
 
   return (
     <div className="space-y-6">
@@ -585,12 +590,29 @@ function BookProgress({
           </div>
         </CardHeader>
         <CardContent className="space-y-4">
+          {/* Enhanced Progress Bar */}
           <div className="space-y-2">
             <div className="flex items-center justify-between text-sm">
-              <span className="text-muted-foreground">Progress</span>
-              <span className="font-medium">{progress}%</span>
+              <span className="text-muted-foreground">
+                {isDone ? "Complete" : isFailed ? "Failed" : book.status === "PLANNING" ? "Planning structure..." : book.status === "WRITING" ? `Writing chapter ${doneCount + 1} of ${book.chapters.length}` : "Exporting files..."}
+              </span>
+              <div className="flex items-center gap-3">
+                {isActive && estimatedMinutesLeft > 0 && (
+                  <span className="text-xs text-muted-foreground flex items-center gap-1">
+                    <Clock className="w-3 h-3" /> ~{estimatedMinutesLeft} min left
+                  </span>
+                )}
+                <span className="font-medium">{progress}%</span>
+              </div>
             </div>
-            <Progress value={progress} className="h-2" />
+            <div className="h-3 bg-muted rounded-full overflow-hidden">
+              <div
+                className={`h-full rounded-full transition-all duration-700 ease-out ${
+                  isDone ? "bg-green-500" : isFailed ? "bg-red-500" : "bg-primary"
+                } ${isActive ? "animate-pulse" : ""}`}
+                style={{ width: `${progress}%` }}
+              />
+            </div>
           </div>
 
           {/* Phase indicators */}
@@ -600,23 +622,57 @@ function BookProgress({
               const done = book.phases[key] && (key === "planning" ? book.phases.writing || isDone : key === "writing" ? book.phases.exporting || isDone : isDone);
               const current = book.status === label.slice(0, -3).toUpperCase() + "ING" || (label === "Writing" && book.status === "WRITING");
               return (
-                <div key={key} className={`rounded-lg border p-3 text-center transition-all ${done ? "bg-primary/5 border-primary/20" : current ? "bg-primary/10 border-primary/30" : "bg-muted/30 border-muted"}`}>
+                <div key={key} className={`rounded-lg border p-3 text-center transition-all ${done ? "bg-green-500/5 border-green-500/20" : current ? "bg-primary/10 border-primary/30" : "bg-muted/30 border-muted"}`}>
                   <div className="flex items-center justify-center mb-1.5">
-                    {done ? <CheckCircle2 className="w-5 h-5 text-primary" /> : current ? <Loader2 className="w-5 h-5 text-primary animate-spin" /> : <Circle className="w-5 h-5 text-muted-foreground/40" />}
+                    {done ? <CheckCircle2 className="w-5 h-5 text-green-600" /> : current ? <Loader2 className="w-5 h-5 text-primary animate-spin" /> : <Circle className="w-5 h-5 text-muted-foreground/40" />}
                   </div>
-                  <span className={`text-xs font-medium ${done || current ? "text-foreground" : "text-muted-foreground"}`}>{label}</span>
+                  <span className={`text-xs font-medium ${done ? "text-green-700 dark:text-green-400" : current ? "text-foreground" : "text-muted-foreground"}`}>{label}</span>
                 </div>
               );
             })}
           </div>
 
-          {/* Active indicator */}
+          {/* Chapter progress dots (when writing) */}
+          {book.status === "WRITING" && book.chapters.length > 0 && (
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between text-xs text-muted-foreground">
+                <span>Chapter progress</span>
+                <span>{doneCount}/{book.chapters.length} complete</span>
+              </div>
+              <div className="flex items-center gap-1 flex-wrap">
+                {book.chapters.map((ch, i) => (
+                  <div
+                    key={ch.id}
+                    className={`w-7 h-7 rounded-md text-[10px] flex items-center justify-center font-medium border transition-all ${
+                      ch.status === "DONE"
+                        ? "bg-green-500/10 border-green-500/30 text-green-700 dark:text-green-400"
+                        : ch.status === "GENERATING" || ch.status === "EDITING"
+                        ? "bg-primary/10 border-primary/30 text-primary animate-pulse"
+                        : ch.status === "FAILED"
+                        ? "bg-red-500/10 border-red-500/30 text-red-700 dark:text-red-400"
+                        : "bg-muted/30 border-muted text-muted-foreground"
+                    }`}
+                    title={`Ch. ${i + 1}: ${ch.title} (${ch.status})`}
+                  >
+                    {ch.status === "DONE" ? "✓" : ch.status === "GENERATING" ? "✎" : ch.status === "EDITING" ? "✍" : i + 1}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Active indicator with more detail */}
           {isActive && (
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
               <Loader2 className="w-4 h-4 animate-spin" />
               <span>
                 {book.status === "PLANNING" && "AI is planning your book structure..."}
-                {book.status === "WRITING" && `Writing chapters (${doneCount}/${book.chapters.length} complete)...`}
+                {book.status === "WRITING" && currentWritingChapter && (
+                  <>
+                    {currentWritingChapter.status === "EDITING" ? "Editing" : "Writing"} Ch. {currentWritingChapter.chapterNumber}: &ldquo;{currentWritingChapter.title}&rdquo;
+                  </>
+                )}
+                {book.status === "WRITING" && !currentWritingChapter && `Writing chapters (${doneCount}/${book.chapters.length} complete)...`}
                 {book.status === "EXPORTING" && "Exporting to EPUB, PDF, MOBI..."}
               </span>
             </div>

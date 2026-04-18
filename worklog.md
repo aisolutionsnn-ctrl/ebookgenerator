@@ -37,3 +37,30 @@ Stage Summary:
 - Pipeline is 33% faster (2s vs 3s inter-call delay, was 8s originally)
 - Niche research now does 9 web searches + 2 LLM passes with much deeper prompts
 - All code passes lint check with no errors
+
+---
+Task ID: 3
+Agent: Main Orchestrator
+Task: Fix stuck in WRITING timeout, auto-resume, rate limit fix, progress bar improvements, writing style
+
+Work Log:
+- Added auto-resume on startup: jobQueue now finds books stuck in PLANNING/WRITING/EXPORTING and re-enqueues them when the server restarts
+- Added `isBookBeingProcessed()` function to track active jobs and prevent false stale detection
+- Fixed stale detection in books/[id]/route.ts: skips stale check if book is actively being processed by job queue
+- Increased stale timeouts: PLANNING 20min, WRITING 90min, EXPORTING 15min
+- Reduced INTER_CALL_DELAY from 2s to 1.5s for faster pipeline
+- Added per-chapter retry logic (MAX_CHAPTER_RETRIES = 2) — if a chapter fails, it retries before moving on
+- Fixed niche research rate limit (429) by changing from 9 parallel searches to 3 batches of 3 with 2s delays
+- Enhanced frontend progress bar: thicker bar with animated pulse, time estimate, chapter progress dots grid
+- Enhanced frontend active indicator: shows specific chapter being written/edited with title
+- Phase indicators now use green color for completed phases
+- Improved writing style prompts: added VOICE AUTHENTICITY section, expanded AI cliché prohibitions
+- Added more AI patterns to Editor prompt: "Let's" transitions, "Imagine a world where", "Not only... but also", etc.
+
+Stage Summary:
+- "Stuck in WRITING" timeout fully resolved: auto-resume on startup, smarter stale detection, longer timeouts
+- Pipeline is more resilient: per-chapter retry, active job tracking, non-blocking chapter failures
+- Rate limiting fixed: 9 searches now run in 3 staggered batches of 3 (avoids 429 errors)
+- Frontend progress bar significantly improved with time estimates and chapter dots
+- Writing style enhanced with more anti-AI patterns and voice authenticity rules
+- All code passes lint check

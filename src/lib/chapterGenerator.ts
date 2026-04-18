@@ -75,6 +75,13 @@ STRUCTURE:
 - Each chapter should be 1500–3000 words.
 - End with a bridge to the next topic — a question, a teaser, or a realization that makes the reader need to keep going. NOT a summary paragraph that repeats what was just said.
 
+VOICE AUTHENTICITY — Sound like a real person, not a content machine:
+- Use first person occasionally ("I've found that..." / "Here's what nobody tells you about...")
+- Address the reader directly sometimes ("You know that feeling when..." / "Try this for a week and see what happens.")
+- Include a contrarian opinion or personal take at least once per chapter — it's what separates a book from a Wikipedia article.
+- Don't be afraid to be wrong on purpose — a bold, slightly controversial claim that you then walk back is more engaging than hedging everything.
+- Real writers have quirks. Use parentheticals (like this), rhetorical questions, and the occasional em dash — they make writing feel alive.
+
 ABSOLUTE PROHIBITIONS — NEVER use these AI clichés:
 - "In today's world" / "In the modern world" / "In today's fast-paced world"
 - "It goes without saying" / "Needless to say"
@@ -89,6 +96,10 @@ ABSOLUTE PROHIBITIONS — NEVER use these AI clichés:
 - "Whether you're a beginner or an expert"
 - "In this chapter, we will..." / "This chapter will cover..."
 - Starting paragraphs with "Moreover" / "Furthermore" / "Additionally"
+- "Let's" as a transition ("Let's explore..." / "Let's dive into..." / "Let's take a look at...")
+- "Imagine a world where..." / "Picture this:"
+- "Not only... but also" (overused AI pattern)
+- "This is where X comes in" / "Enter X" / "That's where X shines"
 - Any phrase that sounds like a corporate memo or academic paper
 
 Do NOT repeat content from previous chapters — each chapter must add NEW information and NEW angles.
@@ -112,6 +123,10 @@ YOUR EDITING MANIFESTO:
    - Corporate-speak: "Navigating the landscape of," "A testament to," "Serves as a reminder"
    - The "list-like" feel where every paragraph follows the same template
    - Excessive qualification: "may," "might," "could potentially," "in some cases"
+   - "Let's" transitions: "Let's explore," "Let's dive into," "Let's take a look"
+   - Fake scenarios: "Imagine a world where...," "Picture this:"
+   - AI sentence patterns: "Not only... but also," "This is where X comes in," "Enter X"
+   - Paragraphs that start with a transition word in 3+ consecutive paragraphs
    Replace ALL of these with natural, confident, direct prose.
 
 2. EVERY PARAGRAPH EARN ITS PLACE — Apply the "so what?" test:

@@ -40,7 +40,7 @@ import { syncBookToCloud, syncChapterToCloud, syncBookFilesToCloud, type SyncBoo
 // ─── Config ───────────────────────────────────────────────────────────
 
 /** Delay between LLM calls to avoid rate limits (ms) */
-const INTER_CALL_DELAY = 2_000;
+const INTER_CALL_DELAY = 1_500;
 
 // ─── Types ────────────────────────────────────────────────────────────
 
@@ -57,9 +57,21 @@ type JobFn = () => Promise<void>;
 const queue: JobFn[] = [];
 let isProcessing = false;
 
+/** Track which book IDs are currently being processed */
+const activeBookIds = new Set<string>();
+
+export function isBookBeingProcessed(bookId: string): boolean {
+  return activeBookIds.has(bookId);
+}
+
 export function enqueueBookJob(bookId: string): void {
   const job: JobFn = async () => {
-    await runBookPipeline(bookId);
+    activeBookIds.add(bookId);
+    try {
+      await runBookPipeline(bookId);
+    } finally {
+      activeBookIds.delete(bookId);
+    }
   };
   queue.push(job);
   console.log(`[JobQueue] Enqueued book job: ${bookId} (queue size: ${queue.length})`);
@@ -82,6 +94,41 @@ async function processQueue(): Promise<void> {
     processQueue();
   }
 }
+
+/**
+ * Auto-resume: On module load, find any books stuck in active statuses
+ * (PLANNING/WRITING/EXPORTING) and re-enqueue them.
+ * This handles the case where the server restarts and the in-memory
+ * queue is lost, leaving books stuck forever.
+ */
+async function autoResumeStuckBooks(): Promise<void> {
+  try {
+    const stuckBooks = await db.book.findMany({
+      where: {
+        status: { in: ["PLANNING", "WRITING", "EXPORTING"] },
+      },
+      select: { id: true, status: true, title: true },
+    });
+
+    if (stuckBooks.length === 0) return;
+
+    console.log(`[JobQueue] Auto-resuming ${stuckBooks.length} stuck book(s) on startup...`);
+    for (const book of stuckBooks) {
+      // Reset any mid-process chapters back to PENDING
+      await db.chapter.updateMany({
+        where: { bookId: book.id, status: { in: ["GENERATING", "EDITING"] } },
+        data: { status: "PENDING" },
+      });
+      enqueueBookJob(book.id);
+      console.log(`[JobQueue] Auto-resumed book ${book.id} (was ${book.status}: "${book.title || 'untitled'}")`);
+    }
+  } catch (err) {
+    console.error("[JobQueue] Auto-resume failed:", err);
+  }
+}
+
+// Run auto-resume on module load (with a small delay to let DB initialize)
+setTimeout(autoResumeStuckBooks, 2000);
 
 // ─── Pipeline ─────────────────────────────────────────────────────────
 
@@ -225,7 +272,9 @@ async function runBookPipeline(bookId: string): Promise<void> {
         }
       }
 
-      // Generate remaining chapters
+      // Generate remaining chapters (with retry logic per chapter)
+      const MAX_CHAPTER_RETRIES = 2;
+
       for (let i = 0; i < plan.toc.length; i++) {
         const chapterOutline = plan.toc[i];
         const chapterNum = i + 1;
@@ -235,67 +284,88 @@ async function runBookPipeline(bookId: string): Promise<void> {
           continue;
         }
 
-        await db.chapter.updateMany({
-          where: { bookId, chapterNumber: chapterNum },
-          data: { status: "GENERATING" },
-        });
+        let chapterSucceeded = false;
+        for (let attempt = 1; attempt <= MAX_CHAPTER_RETRIES; attempt++) {
+          try {
+            await db.chapter.updateMany({
+              where: { bookId, chapterNumber: chapterNum },
+              data: { status: "GENERATING" },
+            });
 
-        console.log(`[Pipeline] Generating chapter ${chapterNum}/${plan.toc.length}: "${chapterOutline.chapterTitle}"`);
+            console.log(`[Pipeline] Generating chapter ${chapterNum}/${plan.toc.length}: "${chapterOutline.chapterTitle}"${attempt > 1 ? ` (attempt ${attempt})` : ""}`);
 
-        // Writer pass
-        const draft = await generateChapterDraft(context, chapterOutline, chapterNum, chapterSummaries);
-        tracker.recordEstimated("writing", JSON.stringify(chapterOutline), draft);
-        await delay(INTER_CALL_DELAY);
+            // Writer pass
+            const draft = await generateChapterDraft(context, chapterOutline, chapterNum, chapterSummaries);
+            tracker.recordEstimated("writing", JSON.stringify(chapterOutline), draft);
+            await delay(INTER_CALL_DELAY);
 
-        // Editor pass
-        await db.chapter.updateMany({
-          where: { bookId, chapterNumber: chapterNum },
-          data: { status: "EDITING" },
-        });
+            // Editor pass
+            await db.chapter.updateMany({
+              where: { bookId, chapterNumber: chapterNum },
+              data: { status: "EDITING" },
+            });
 
-        const edited = await editChapterDraft(context, chapterOutline, chapterNum, draft);
-        tracker.recordEstimated("editing", draft, edited);
-        await delay(INTER_CALL_DELAY);
+            const edited = await editChapterDraft(context, chapterOutline, chapterNum, draft);
+            tracker.recordEstimated("editing", draft, edited);
+            await delay(INTER_CALL_DELAY);
 
-        // Save the edited markdown
-        await db.chapter.updateMany({
-          where: { bookId, chapterNumber: chapterNum },
-          data: {
-            markdown: edited,
-            status: "DONE",
-            generatedAt: new Date(),
-            editedAt: new Date(),
-          },
-        });
+            // Save the edited markdown
+            await db.chapter.updateMany({
+              where: { bookId, chapterNumber: chapterNum },
+              data: {
+                markdown: edited,
+                status: "DONE",
+                generatedAt: new Date(),
+                editedAt: new Date(),
+              },
+            });
 
-        // Touch book to indicate chapter completed — prevents stale detection
-        await touchBook(bookId);
+            // Touch book to indicate chapter completed — prevents stale detection
+            await touchBook(bookId);
 
-        // Auto-sync: push updated chapter to Supabase
-        const updatedChapter = await db.chapter.findFirst({ where: { bookId, chapterNumber: chapterNum } });
-        if (updatedChapter) {
-          autoSyncChapter({
-            id: updatedChapter.id, bookId: updatedChapter.bookId,
-            chapterNumber: updatedChapter.chapterNumber, title: updatedChapter.title,
-            outline: updatedChapter.outline, markdown: updatedChapter.markdown,
-            status: updatedChapter.status,
-            generatedAt: updatedChapter.generatedAt?.toISOString() ?? null,
-            editedAt: updatedChapter.editedAt?.toISOString() ?? null,
-          });
+            // Auto-sync: push updated chapter to Supabase
+            const updatedChapter = await db.chapter.findFirst({ where: { bookId, chapterNumber: chapterNum } });
+            if (updatedChapter) {
+              autoSyncChapter({
+                id: updatedChapter.id, bookId: updatedChapter.bookId,
+                chapterNumber: updatedChapter.chapterNumber, title: updatedChapter.title,
+                outline: updatedChapter.outline, markdown: updatedChapter.markdown,
+                status: updatedChapter.status,
+                generatedAt: updatedChapter.generatedAt?.toISOString() ?? null,
+                editedAt: updatedChapter.editedAt?.toISOString() ?? null,
+              });
+            }
+
+            // Generate summary for context of next chapters
+            const summary = await summarizeChapter(chapterOutline.chapterTitle, edited);
+            chapterSummaries.push(summary);
+            await delay(INTER_CALL_DELAY);
+
+            // Save token usage periodically
+            await db.book.update({
+              where: { id: bookId },
+              data: { tokenUsageJson: tracker.toJSON() },
+            });
+
+            console.log(`[Pipeline] Chapter ${chapterNum} complete`);
+            chapterSucceeded = true;
+            break; // success, exit retry loop
+          } catch (chapterErr) {
+            console.error(`[Pipeline] Chapter ${chapterNum} attempt ${attempt} failed:`, chapterErr);
+            if (attempt < MAX_CHAPTER_RETRIES) {
+              console.log(`[Pipeline] Retrying chapter ${chapterNum}...`);
+              await delay(3_000); // Wait before retry
+            } else {
+              // Final attempt failed — mark chapter as FAILED and continue with remaining chapters
+              console.error(`[Pipeline] Chapter ${chapterNum} failed after ${MAX_CHAPTER_RETRIES} attempts, moving on`);
+              await db.chapter.updateMany({
+                where: { bookId, chapterNumber: chapterNum },
+                data: { status: "FAILED" },
+              });
+              await touchBook(bookId);
+            }
+          }
         }
-
-        // Generate summary for context of next chapters
-        const summary = await summarizeChapter(chapterOutline.chapterTitle, edited);
-        chapterSummaries.push(summary);
-        await delay(INTER_CALL_DELAY);
-
-        // Save token usage periodically
-        await db.book.update({
-          where: { id: bookId },
-          data: { tokenUsageJson: tracker.toJSON() },
-        });
-
-        console.log(`[Pipeline] Chapter ${chapterNum} complete`);
       }
     }
 

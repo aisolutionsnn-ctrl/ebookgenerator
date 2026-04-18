@@ -19,48 +19,66 @@ export async function POST(request: NextRequest) {
 
     const effectiveSubNiche = customNiche || subNiche;
 
-    // ── Step 1: Web search for market data (9 parallel searches for thorough analysis) ──
+    // ── Step 1: Web search for market data (staggered batches to avoid rate limits) ──
     let searchContext = "No web search data available — proceed with general knowledge.";
 
     try {
       const zai = await ZAI.create();
 
-      const [searchResult1, searchResult2, searchResult3, searchResult4, searchResult5, searchResult6, searchResult7, searchResult8, searchResult9] = await Promise.allSettled([
+      // Helper: delay between batches
+      const batchDelay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+      // Batch 1: Core market data (3 searches)
+      const [searchResult1, searchResult2, searchResult3] = await Promise.allSettled([
         zai.functions.invoke("web_search", {
           query: `ebook ${effectiveSubNiche} market trends profitability 2024 2025`,
-          num: 10,
+          num: 8,
         }),
         zai.functions.invoke("web_search", {
           query: `best selling ebooks ${effectiveSubNiche} ${niche} amazon kindle`,
-          num: 10,
+          num: 8,
         }),
         zai.functions.invoke("web_search", {
           query: `${effectiveSubNiche} ebook reader demand audience pain points problems`,
-          num: 10,
+          num: 8,
         }),
+      ]);
+
+      // Wait 2 seconds before next batch to avoid rate limiting
+      await batchDelay(2000);
+
+      // Batch 2: Competition & reviews (3 searches)
+      const [searchResult4, searchResult5, searchResult6] = await Promise.allSettled([
         zai.functions.invoke("web_search", {
           query: `${effectiveSubNiche} niche competition analysis ebook digital product`,
-          num: 10,
+          num: 8,
         }),
         zai.functions.invoke("web_search", {
           query: `${effectiveSubNiche} ebook reviews complaints what readers want`,
-          num: 10,
+          num: 8,
         }),
         zai.functions.invoke("web_search", {
           query: `${effectiveSubNiche} ${niche} google trends market forecast 2025 2026`,
-          num: 10,
+          num: 8,
         }),
+      ]);
+
+      // Wait 2 seconds before next batch
+      await batchDelay(2000);
+
+      // Batch 3: Community & revenue (3 searches)
+      const [searchResult7, searchResult8, searchResult9] = await Promise.allSettled([
         zai.functions.invoke("web_search", {
           query: `${effectiveSubNiche} reddit forum community questions struggles`,
-          num: 10,
+          num: 8,
         }),
         zai.functions.invoke("web_search", {
           query: `${effectiveSubNiche} online course udemy skillshare demand popularity`,
-          num: 10,
+          num: 8,
         }),
         zai.functions.invoke("web_search", {
           query: `"${effectiveSubNiche}" ebook price revenue income self-publishing kdp`,
-          num: 10,
+          num: 8,
         }),
       ]);
 

@@ -7,6 +7,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { getCurrentUser } from "@/lib/authCookies";
 import { deleteBookFromCloud } from "@/lib/supabaseSync";
+import { isBookBeingProcessed } from "@/lib/jobQueue";
 import { unlink } from "fs/promises";
 import { existsSync } from "fs";
 
@@ -35,24 +36,27 @@ export async function GET(
 
     // Auto-detect stale books: if stuck for too long, mark as FAILED
     // Uses updatedAt (not createdAt) so books that were recently resumed aren't falsely marked stale
-    // Writing an 8-12 chapter book can legitimately take 15-30 minutes
-    const PLANNING_STALE_MS = 15 * 60 * 1000; // 15 minutes for planning (includes metadata generation)
-    const WRITING_STALE_MS = 60 * 60 * 1000;  // 60 minutes for writing (8-12 chapters × ~3min each)
-    const EXPORTING_STALE_MS = 10 * 60 * 1000; // 10 minutes for exporting
-    const STALE_THRESHOLD_MS = book.status === "PLANNING" ? PLANNING_STALE_MS : book.status === "EXPORTING" ? EXPORTING_STALE_MS : WRITING_STALE_MS;
-    const activeStatuses = ["PLANNING", "WRITING", "EXPORTING"];
-    if (activeStatuses.includes(book.status)) {
-      const idleTime = Date.now() - new Date(book.updatedAt).getTime();
-      if (idleTime > STALE_THRESHOLD_MS && !book.completedAt) {
-        const stuckStatus = book.status;
-        const errorMsg = `Generation timed out — stuck in ${stuckStatus} with no progress for over ${Math.round(idleTime / 60000)} minutes. Click "Resume from Checkpoint" to retry.`;
-        console.warn(`[API] Book ${book.id} stuck in ${stuckStatus} for ${Math.round(idleTime / 60000)}min (no update since ${book.updatedAt.toISOString()}), marking as FAILED`);
-        await db.book.update({
-          where: { id: book.id },
-          data: { status: "FAILED", errorMessage: errorMsg },
-        });
-        book.status = "FAILED";
-        book.errorMessage = errorMsg;
+    // CRITICAL: Skip stale detection if the book is actively being processed by the job queue
+    // This prevents falsely marking books as FAILED when they're genuinely in progress
+    if (!isBookBeingProcessed(book.id)) {
+      const PLANNING_STALE_MS = 20 * 60 * 1000; // 20 minutes for planning (includes metadata generation)
+      const WRITING_STALE_MS = 90 * 60 * 1000;  // 90 minutes for writing (8-12 chapters × ~5min each)
+      const EXPORTING_STALE_MS = 15 * 60 * 1000; // 15 minutes for exporting
+      const STALE_THRESHOLD_MS = book.status === "PLANNING" ? PLANNING_STALE_MS : book.status === "EXPORTING" ? EXPORTING_STALE_MS : WRITING_STALE_MS;
+      const activeStatuses = ["PLANNING", "WRITING", "EXPORTING"];
+      if (activeStatuses.includes(book.status)) {
+        const idleTime = Date.now() - new Date(book.updatedAt).getTime();
+        if (idleTime > STALE_THRESHOLD_MS && !book.completedAt) {
+          const stuckStatus = book.status;
+          const errorMsg = `Generation timed out — stuck in ${stuckStatus} with no progress for over ${Math.round(idleTime / 60000)} minutes. Click "Resume from Checkpoint" to retry.`;
+          console.warn(`[API] Book ${book.id} stuck in ${stuckStatus} for ${Math.round(idleTime / 60000)}min (no update since ${book.updatedAt.toISOString()}), marking as FAILED`);
+          await db.book.update({
+            where: { id: book.id },
+            data: { status: "FAILED", errorMessage: errorMsg },
+          });
+          book.status = "FAILED";
+          book.errorMessage = errorMsg;
+        }
       }
     }
 
