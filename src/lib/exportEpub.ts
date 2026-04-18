@@ -88,9 +88,8 @@ export async function exportToEpub(input: EpubExportInput): Promise<string> {
     if (metadata?.date) {
       metaLines.push(`date: "${metadata.date}"`);
     }
-    if (coverArg) {
-      metaLines.push(`cover-image: cover.png`);
-    }
+    // NOTE: cover-image in YAML metadata is resolved relative to CWD, which causes
+    // "does not exist" errors. We use --epub-cover-image CLI flag instead (absolute path).
 
     const metadataYml = `---\n${metaLines.join("\n")}\n---\n`;
     const metadataPath = join(workDir, "metadata.yml");
@@ -118,8 +117,13 @@ export async function exportToEpub(input: EpubExportInput): Promise<string> {
       `--output=${epubPath}`,
       "--toc",
       "--toc-depth=2",
-      "--epub-chapter-level=1",
+      "--split-level=1",
     ];
+
+    // Use absolute path for cover image (avoids "does not exist" errors)
+    if (coverArg) {
+      pandocArgs.push(`--epub-cover-image=${coverArg}`);
+    }
 
     console.log(`[EPUB] Running Pandoc with ${chapters.length} chapters`);
 
