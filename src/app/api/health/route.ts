@@ -8,7 +8,7 @@ import { db } from "@/lib/db";
 
 export async function GET() {
   const timestamp = new Date().toISOString();
-  const checks: Record<string, "ok" | "error"> = {};
+  const checks: Record<string, string> = {};
 
   // Check database
   try {
@@ -21,14 +21,13 @@ export async function GET() {
   // Check LLM provider availability
   try {
     const hasOpenRouter = !!process.env.OPENROUTER_API_KEY;
-    // z-ai-web-dev-sdk is always available (bundled)
-    checks.llm = "ok"; // At least z-ai-web-dev-sdk is always present
-    checks.llmProvider = hasOpenRouter ? "openrouter" : "z-ai-sdk";
+    checks.llm = hasOpenRouter ? "ok" : "error";
+    checks.llmProvider = hasOpenRouter ? "openrouter" : "not-configured";
   } catch {
     checks.llm = "error";
   }
 
-  const allOk = Object.values(checks).every((v) => v === "ok" || v === "openrouter" || v === "z-ai-sdk");
+  const allOk = Object.values(checks).every((v) => v === "ok" || v === "openrouter");
 
   return NextResponse.json({
     status: allOk ? "ok" : "degraded",

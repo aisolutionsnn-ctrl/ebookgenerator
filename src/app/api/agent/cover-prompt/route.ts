@@ -10,14 +10,11 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { createChatCompletionJSON } from "@/lib/openRouterClient";
 import { COVER_PROMPT_SYSTEM_PROMPT } from "@/lib/agent/prompts";
-import ZAI from "z-ai-web-dev-sdk";
 import type {
   CoverPromptResult,
   CoverStyle,
   CoverPromptRequest,
 } from "@/lib/agent/types";
-import fs from "fs";
-import path from "path";
 
 export async function POST(request: NextRequest) {
   try {
@@ -86,53 +83,11 @@ export async function POST(request: NextRequest) {
     const styleOptions = llmResult.styleOptions;
 
     // ── Optionally generate image ──────────────────────────────────────
-    let imagePath: string | null = null;
+    // Image generation via ZAI is disabled — use the generated prompt with an external tool.
+    const imagePath: string | null = null;
 
     if (generateImage) {
-      try {
-        const zai = await ZAI.create();
-
-        // Apply style modifier if provided
-        let styleModifier = "";
-        if (style) {
-          const matchedStyle = styleOptions.find(
-            (s) => s.name.toLowerCase() === style.toLowerCase()
-          );
-          styleModifier = matchedStyle?.promptModifier ?? style;
-        }
-
-        const fullPrompt = coverPrompt + (styleModifier ? ` ${styleModifier}` : "");
-
-        const imageResult = await zai.images.generations.create({
-          prompt: fullPrompt,
-          size: "768x1152", // ebook cover aspect ratio (2:3)
-        });
-
-        // Save image to disk
-        const coversDir = path.join(process.cwd(), "public", "covers");
-        if (!fs.existsSync(coversDir)) {
-          fs.mkdirSync(coversDir, { recursive: true });
-        }
-
-        const fileName = `${bookId}.png`;
-        const filePath = path.join(coversDir, fileName);
-
-        // The SDK returns base64 data in data[0].base64
-        const base64Data = imageResult.data?.[0]?.base64 ?? "";
-        if (base64Data) {
-          const buffer = Buffer.from(base64Data, "base64");
-          fs.writeFileSync(filePath, buffer);
-          imagePath = `/covers/${fileName}`;
-        } else {
-          console.warn("[CoverPrompt] No base64 data returned from image generation.");
-        }
-      } catch (imgErr) {
-        console.error(
-          `[CoverPrompt] Image generation failed for book ${bookId}:`,
-          imgErr
-        );
-        // Continue without image — the prompt and styleOptions are still useful
-      }
+      console.log("[CoverPrompt] Image generation skipped (ZAI disabled). Use the generated prompt with an external image tool.");
     }
 
     // ── Build result ───────────────────────────────────────────────────

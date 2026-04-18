@@ -10,7 +10,6 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { createChatCompletionJSON } from "@/lib/openRouterClient";
 import { SEO_SALES_SYSTEM_PROMPT } from "@/lib/agent/prompts";
-import ZAI from "z-ai-web-dev-sdk";
 import type {
   SeoSalesResult,
   SeoOptimizeRequest,
@@ -56,14 +55,6 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // ── Initialize ZAI for web search ──────────────────────────────────
-    let zai: Awaited<ReturnType<typeof ZAI.create>> | null = null;
-    try {
-      zai = await ZAI.create();
-    } catch (zaiErr) {
-      console.warn("[SeoOptimize] ZAI init failed:", zaiErr);
-    }
-
     // ── Process each book ──────────────────────────────────────────────
     const results: SeoSalesResult[] = [];
 
@@ -83,35 +74,8 @@ export async function POST(request: NextRequest) {
         .map((ch) => ch.title)
         .join(", ");
 
-      // ── Web search for SEO keywords (resilient) ───────────────────────
-      let searchKeywordData = "Web search unavailable — proceed with general SEO knowledge.";
-      if (zai) {
-        try {
-          const [seoResults, popularResults] = await Promise.allSettled([
-            zai.functions.invoke("web_search", {
-              query: `seo keywords ${book.prompt} ebook`,
-              num: 5,
-            }),
-            zai.functions.invoke("web_search", {
-              query: `${book.prompt} popular search terms`,
-              num: 5,
-            }),
-          ]);
-
-          const parts: string[] = [];
-          if (seoResults.status === "fulfilled") {
-            parts.push("SEO Keywords Search Results:\n" + JSON.stringify(seoResults.value, null, 2));
-          }
-          if (popularResults.status === "fulfilled") {
-            parts.push("Popular Search Terms Results:\n" + JSON.stringify(popularResults.value, null, 2));
-          }
-          if (parts.length > 0) {
-            searchKeywordData = parts.join("\n\n");
-          }
-        } catch (searchErr) {
-          console.warn(`[SeoOptimize] Web search failed for book ${bookId}:`, searchErr);
-        }
-      }
+      // ── Web search skipped (ZAI disabled) ────────────────────────────
+      const searchKeywordData = "Web search unavailable — use general SEO knowledge for keyword research.";
 
       // ── Competition pricing context ───────────────────────────────────
       const competitionPricing = competitionData
