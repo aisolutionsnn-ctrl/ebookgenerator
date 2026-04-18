@@ -19,13 +19,13 @@ export async function POST(request: NextRequest) {
 
     const effectiveSubNiche = customNiche || subNiche;
 
-    // ── Step 1: Web search for market data (6 parallel searches for thorough analysis) ──
+    // ── Step 1: Web search for market data (9 parallel searches for thorough analysis) ──
     let searchContext = "No web search data available — proceed with general knowledge.";
 
     try {
       const zai = await ZAI.create();
 
-      const [searchResult1, searchResult2, searchResult3, searchResult4, searchResult5, searchResult6] = await Promise.allSettled([
+      const [searchResult1, searchResult2, searchResult3, searchResult4, searchResult5, searchResult6, searchResult7, searchResult8, searchResult9] = await Promise.allSettled([
         zai.functions.invoke("web_search", {
           query: `ebook ${effectiveSubNiche} market trends profitability 2024 2025`,
           num: 10,
@@ -50,6 +50,18 @@ export async function POST(request: NextRequest) {
           query: `${effectiveSubNiche} ${niche} google trends market forecast 2025 2026`,
           num: 10,
         }),
+        zai.functions.invoke("web_search", {
+          query: `${effectiveSubNiche} reddit forum community questions struggles`,
+          num: 10,
+        }),
+        zai.functions.invoke("web_search", {
+          query: `${effectiveSubNiche} online course udemy skillshare demand popularity`,
+          num: 10,
+        }),
+        zai.functions.invoke("web_search", {
+          query: `"${effectiveSubNiche}" ebook price revenue income self-publishing kdp`,
+          num: 10,
+        }),
       ]);
 
       const parts: string[] = [];
@@ -60,6 +72,9 @@ export async function POST(request: NextRequest) {
         { result: searchResult4, label: "Competition Analysis" },
         { result: searchResult5, label: "Reader Complaints & Wishes" },
         { result: searchResult6, label: "Trend Forecasting" },
+        { result: searchResult7, label: "Community Discussions (Reddit/Forums)" },
+        { result: searchResult8, label: "Course Demand (Udemy/Skillshare)" },
+        { result: searchResult9, label: "Revenue & Pricing Data" },
       ];
 
       for (const { result, label } of results) {
@@ -108,15 +123,15 @@ export async function POST(request: NextRequest) {
         JSON.stringify(nicheData, null, 2),
         ``,
         `And here is the original search data for reference:`,
-        searchContext.slice(0, 8000), // Limit context to avoid token overflow
+        searchContext.slice(0, 12000), // Limit context to avoid token overflow
         ``,
         `Now DEEPEN this analysis with a second pass. Specifically:`,
-        `1. searchInsights: Expand with SPECIFIC data points — cite exact prices, book titles, search volumes, revenue figures, or growth percentages you found in the search data. Make it 8-12 sentences instead of 4-6.`,
-        `2. suggestedSubNiches: For EACH sub-niche, provide more specific reasoning — why it's underserved, what specific gap exists, who the target reader is, and estimate realistic monthly revenue potential ($X-$Y range).`,
-        `3. profitability: If the search data shows specific revenue or price data, justify your score more precisely.`,
-        `4. demand: Reference specific search trends, forum post counts, or community sizes you found.`,
+        `1. searchInsights: Expand with SPECIFIC data points — cite exact prices, book titles, search volumes, revenue figures, community sizes, Reddit discussions, course demand, or growth percentages you found in the search data. Make it 12-18 sentences with every claim backed by evidence.`,
+        `2. suggestedSubNiches: For EACH sub-niche, provide more specific reasoning — why it's underserved, what specific gap exists, who the target reader is, estimate realistic monthly revenue potential ($X-$Y range), competition level, and differentiation angle.`,
+        `3. profitability: If the search data shows specific revenue or price data, justify your score more precisely with dollar amounts.`,
+        `4. demand: Reference specific search trends, Reddit subscriber counts, forum post counts, community sizes, or course enrollment data.`,
         ``,
-        `Keep the same JSON structure but with MUCH more detailed, evidence-backed content.`,
+        `Keep the same JSON structure but with MUCH more detailed, evidence-backed content. Include 5-8 suggested sub-niches.`,
       ].join("\n");
 
       deepenedData = await createChatCompletionJSON<NicheResearchResult>(

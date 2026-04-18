@@ -25,6 +25,7 @@ import ReactMarkdown from "react-markdown";
 import { PDF_TEMPLATES, type PdfTemplate } from "@/lib/pdfTemplates";
 import { SUPPORTED_LANGUAGES, type LanguageCode } from "@/lib/i18n";
 import { EbookAgentView } from "@/components/ebook-agent-view";
+import { safeResponseJson } from "@/lib/utils";
 
 // ─── Types ────────────────────────────────────────────────────────────
 
@@ -112,7 +113,7 @@ export default function Home() {
       try {
         const res = await fetch("/api/auth/session");
         if (res.ok) {
-          const data = await res.json();
+          const data = await safeResponseJson<{authenticated?: boolean; user?: AuthUser}>(res);
           if (data.authenticated && data.user) {
             setAuthUser(data.user);
           }
@@ -127,9 +128,9 @@ export default function Home() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ email, password }),
     });
-    const data = await res.json();
+    const data = await safeResponseJson<{error?: string; user?: AuthUser}>(res);
     if (!res.ok) throw new Error(data.error || "Login failed");
-    setAuthUser(data.user);
+    if (data.user) setAuthUser(data.user);
     setView("landing");
   }, []);
 
@@ -143,7 +144,7 @@ export default function Home() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ email, password, displayName }),
     });
-    const data = await res.json();
+    const data = await safeResponseJson<{error?: string; user?: AuthUser; needsVerification?: boolean; message?: string}>(res);
     if (!res.ok) throw new Error(data.error || "Registration failed");
 
     // Check if email verification is needed (no session returned)
@@ -186,7 +187,7 @@ export default function Home() {
   const fetchBooks = useCallback(async () => {
     try {
       const res = await fetch("/api/books");
-      if (res.ok) { const data = await res.json(); setBooks(data.books); }
+      if (res.ok) { const data = await safeResponseJson<{books: BookListItem[]}>(res); setBooks(data.books); }
     } catch { /* ignore */ }
   }, []);
 
@@ -200,8 +201,8 @@ export default function Home() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ prompt, audience, tone, lengthHint, language, pdfTemplate }),
       });
-      if (!res.ok) { const err = await res.json(); throw new Error(err.error || "Failed"); }
-      const data = await res.json();
+      if (!res.ok) { const err = await safeResponseJson<{error?: string}>(res); throw new Error(err.error || "Failed"); }
+      const data = await safeResponseJson<{id: string}>(res);
       setActiveBookId(data.id);
       setView("progress");
       setPrompt("");
@@ -219,7 +220,7 @@ export default function Home() {
       try {
         const res = await fetch(`/api/books/${activeBookId}`);
         if (res.ok) {
-          const data: BookData = await res.json();
+          const data = await safeResponseJson<BookData>(res);
           setBookData(data);
           if (data.status === "DONE" || data.status === "FAILED") {
             if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
@@ -238,7 +239,7 @@ export default function Home() {
     setIsResuming(true);
     try {
       const res = await fetch(`/api/books/${activeBookId}/resume`, { method: "POST" });
-      if (!res.ok) { const err = await res.json(); throw new Error(err.error || "Failed"); }
+      if (!res.ok) { const err = await safeResponseJson<{error?: string}>(res); throw new Error(err.error || "Failed"); }
       setBookData(null);
     } catch (err: unknown) {
       alert(err instanceof Error ? err.message : "Unknown error");
@@ -258,7 +259,7 @@ export default function Home() {
       setEditingChapter(null);
       // Refresh book data
       const res = await fetch(`/api/books/${activeBookId}`);
-      if (res.ok) setBookData(await res.json());
+      if (res.ok) setBookData(await safeResponseJson<BookData>(res));
     } catch { alert("Failed to save chapter"); }
   }, [activeBookId]);
 
@@ -293,7 +294,7 @@ export default function Home() {
     try {
       const res = await fetch(`/api/books/${bookId}`, { method: "DELETE" });
       if (!res.ok) {
-        const err = await res.json();
+        const err = await safeResponseJson<{error?: string}>(res);
         throw new Error(err.error || "Delete failed");
       }
       // Refresh the list
@@ -1085,7 +1086,14 @@ function CloudView() {
     try {
       const res = await fetch("/api/sync/status");
       if (res.ok) {
-        const data = await res.json();
+        const data = await safeResponseJson<{
+          configured: boolean;
+          connected: boolean;
+          bookCount: number;
+          tableExists: boolean;
+          storageBucketExists: boolean;
+          setupSQL?: string;
+        }>(res);
         setStatus(data);
       }
     } catch { /* ignore */ } finally { setLoading(false); }
@@ -1098,7 +1106,7 @@ function CloudView() {
     setResult(null);
     try {
       const res = await fetch("/api/sync/push", { method: "POST" });
-      const data = await res.json();
+      const data = await safeResponseJson<Record<string, unknown>>(res);
       setResult({ type: "push", data });
     } catch (err) {
       setResult({ type: "push", data: { error: err instanceof Error ? err.message : "Push failed" } });
@@ -1111,7 +1119,7 @@ function CloudView() {
     setResult(null);
     try {
       const res = await fetch("/api/sync/pull", { method: "POST" });
-      const data = await res.json();
+      const data = await safeResponseJson<Record<string, unknown>>(res);
       setResult({ type: "pull", data });
     } catch (err) {
       setResult({ type: "pull", data: { error: err instanceof Error ? err.message : "Pull failed" } });

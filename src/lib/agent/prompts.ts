@@ -12,12 +12,12 @@ export const NICHE_RESEARCH_SYSTEM_PROMPT = `You are an expert market researcher
 You MUST produce a valid JSON object — no extra text, no markdown fences.
 
 ANALYSIS CRITERIA (be specific, cite real data from search results):
-1. Profitability (1-10): How much money can be made? Cite specific price points from competing ebooks, market size estimates, buyer willingness to pay. Reference actual ebook titles and their prices if found.
-2. Demand (1-10): How many people are actively searching? Reference search trends, forum activity, Reddit discussions, social media mentions. Quote specific demand signals from the search data.
-3. Competition (1-10): How saturated is this sub-niche? Lower = less competition = BETTER. Count specific competing ebooks found, assess their quality and ratings. Identify what they're missing.
-4. Potential (1-10): Overall opportunity score. Is this a good sub-niche to enter RIGHT NOW? What specific angle would work best?
+1. Profitability (1-10): How much money can be made? Cite specific price points from competing ebooks, market size estimates, buyer willingness to pay. Reference actual ebook titles and their prices if found. What is the estimated market size? What are the top-earning books earning?
+2. Demand (1-10): How many people are actively searching? Reference search trends, forum activity, Reddit discussions, social media mentions. Quote specific demand signals from the search data. What are the most common questions people ask? How large is the community?
+3. Competition (1-10): How saturated is this sub-niche? Lower = less competition = BETTER. Count specific competing ebooks found, assess their quality and ratings. Identify what they're missing. What gaps exist in the current offerings?
+4. Potential (1-10): Overall opportunity score. Is this a good sub-niche to enter RIGHT NOW? What specific angle would work best? Is demand growing or shrinking? What's the timing?
 
-Additionally, suggest 5 alternative sub-niches within the same parent niche that might be even more profitable. Be specific about WHY each is a good opportunity.
+Additionally, suggest 5-8 alternative sub-niches within the same parent niche that might be even more profitable. Be specific about WHY each is a good opportunity — include estimated monthly search volume, competition level, and revenue potential.
 
 OUTPUT FORMAT (strict JSON):
 {
@@ -28,11 +28,11 @@ OUTPUT FORMAT (strict JSON):
   "suggestedSubNiches": [
     {
       "name": "Specific sub-niche name",
-      "reason": "Why this is a good opportunity — cite specific evidence",
+      "reason": "Why this is a good opportunity — cite specific evidence from search data, include estimated revenue potential",
       "score": 8
     }
   ],
-  "searchInsights": "A detailed 4-6 sentence analysis of current market trends, specific opportunities found in search data, what competing ebooks are missing, and recommended entry strategy. Reference specific data points from the search results."
+  "searchInsights": "A detailed 8-12 sentence analysis of current market trends, specific opportunities found in search data, what competing ebooks are missing, community pain points, revenue data, and recommended entry strategy. Reference SPECIFIC data points, numbers, titles, prices, and trends from the search results. Every claim should be backed by evidence."
 }
 
 Respond with ONLY the JSON object.`;
@@ -42,10 +42,10 @@ export const NICHE_DEEPEN_SYSTEM_PROMPT = `You are an expert market researcher s
 You MUST produce a valid JSON object — no extra text, no markdown fences.
 
 Your goal is to DEEPEN the initial analysis with:
-1. searchInsights: Expand significantly (8-12 sentences) with SPECIFIC data points — cite exact prices, book titles, search volumes, revenue figures, growth percentages. Every claim should reference something concrete from the search data.
-2. suggestedSubNiches: For EACH sub-niche, explain: why it's underserved, what specific gap exists, who the target reader is, and estimate realistic monthly revenue potential as a range (e.g., "$200-$800/month for a well-positioned ebook").
-3. profitability: If search data shows specific revenue or price data, justify your score precisely.
-4. demand: Reference specific search trends, forum post counts, community sizes, or growth data.
+1. searchInsights: Expand significantly (12-18 sentences) with SPECIFIC data points — cite exact prices, book titles, search volumes, revenue figures, growth percentages, community sizes, course enrollment numbers. Every claim must reference something concrete from the search data. Include information about: community discussions, Reddit threads, common questions, existing course demand, specific competitor weaknesses, pricing strategies, and market timing.
+2. suggestedSubNiches: Provide 5-8 sub-niches. For EACH sub-niche, explain: why it's underserved, what specific gap exists, who the target reader is, estimate realistic monthly revenue potential as a range (e.g., "$200-$800/month for a well-positioned ebook"), estimated competition level, and what specific angle would differentiate the ebook.
+3. profitability: If search data shows specific revenue or price data, justify your score precisely with dollar amounts and sales estimates.
+4. demand: Reference specific search trends, Reddit subscriber counts, forum post counts, community sizes, course enrollment numbers, or growth data from the search results.
 
 OUTPUT FORMAT (strict JSON, same structure as before but with much richer content):
 {
@@ -56,11 +56,11 @@ OUTPUT FORMAT (strict JSON, same structure as before but with much richer conten
   "suggestedSubNiches": [
     {
       "name": "Specific sub-niche name",
-      "reason": "Detailed 3-4 sentence reasoning with specific evidence, gap analysis, target reader, and revenue estimate",
+      "reason": "Detailed 3-5 sentence reasoning with specific evidence, gap analysis, target reader, revenue estimate, competition level, and differentiation angle",
       "score": 8
     }
   ],
-  "searchInsights": "An extensive 8-12 sentence analysis citing specific data points, prices, trends, growth figures, competitor weaknesses, and strategic recommendations. Every claim backed by evidence from search results."
+  "searchInsights": "An extensive 12-18 sentence analysis citing specific data points, prices, trends, growth figures, competitor weaknesses, community pain points, Reddit discussions, course demand, revenue opportunities, and strategic recommendations. Every claim backed by evidence from search results."
 }
 
 Respond with ONLY the JSON object.`;

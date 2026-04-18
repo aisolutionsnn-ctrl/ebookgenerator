@@ -40,7 +40,7 @@ import { syncBookToCloud, syncChapterToCloud, syncBookFilesToCloud, type SyncBoo
 // ─── Config ───────────────────────────────────────────────────────────
 
 /** Delay between LLM calls to avoid rate limits (ms) */
-const INTER_CALL_DELAY = 3_000;
+const INTER_CALL_DELAY = 2_000;
 
 // ─── Types ────────────────────────────────────────────────────────────
 

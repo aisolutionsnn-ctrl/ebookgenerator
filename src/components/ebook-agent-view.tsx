@@ -5,7 +5,7 @@ import {
   BookOpen, Search, Trophy, CheckSquare, TrendingUp, Image as ImageIcon,
   Loader2, ChevronRight, Copy, CheckCircle, Sparkles,
   Download, Star, DollarSign, Tag, FileText, ExternalLink,
-  Circle, HalfCircle, Zap, PartyPopper, PenLine, FileOutput,
+  Circle, Zap, PartyPopper, PenLine, FileOutput,
   Brain, AlertCircle, RotateCcw,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -19,6 +19,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { NICHE_CATEGORIES } from "@/lib/agent/niche-data";
+import { safeResponseJson } from "@/lib/utils";
 import type {
   NicheResearchResult, CompetitionResult, QualityAssessmentResult,
   SeoSalesResult, CoverPromptResult, AgentStep,
@@ -640,7 +641,10 @@ export function EbookAgentView({ onOpenBook }: EbookAgentViewProps) {
               try {
                 const res = await fetch(`/api/books/${bookId}`);
                 if (res.ok) {
-                  const bookData = await res.json();
+                  const bookData = await safeResponseJson<{
+                    status: string; title: string | null; errorMessage: string | null;
+                    chapters: { status: string; chapterNumber: number; title: string }[];
+                  }>(res);
                   const chapters = bookData.chapters || [];
                   const doneCh = chapters.filter((c: { status: string }) => c.status === "DONE").length;
                   const currentCh = chapters.find((c: { status: string }) => c.status === "GENERATING" || c.status === "EDITING");
@@ -679,7 +683,13 @@ export function EbookAgentView({ onOpenBook }: EbookAgentViewProps) {
           try {
             const res = await fetch(`/api/books/${bookId}`);
             if (res.ok) {
-              const data = await res.json();
+              const data = await safeResponseJson<{
+                id: string; title: string | null; status: string;
+                phases: { planning?: boolean; writing?: boolean; exporting?: boolean } | null;
+                chapters: { status: string }[];
+                errorMessage: string | null;
+                prompt: string;
+              }>(res);
               progressMap.set(bookId, computeBookProgress(data));
               const allDone = Array.from(progressMap.values()).every(b => b.status === "DONE" || b.status === "FAILED");
               const allSuccess = Array.from(progressMap.values()).every(b => b.status === "DONE");
