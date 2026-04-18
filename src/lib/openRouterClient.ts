@@ -1,38 +1,14 @@
 /**
  * Unified LLM Client
  *
- * Provides a single interface for LLM chat completions.
- * Uses z-ai-web-dev-sdk as the default backend (no API key needed).
- * Optionally uses OpenRouter when OPENROUTER_API_KEY is set.
- *
- * Security: API keys are loaded exclusively from environment variables.
- * Never logged or echoed back to the user.
+ * Provides a single interface for LLM chat completions using OpenRouter.
+ * Uses the API key from OPENROUTER_API_KEY environment variable.
  */
-
-import ZAI from "z-ai-web-dev-sdk";
 
 const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 const DEFAULT_MODEL = "qwen/qwen-2.5-72b-instruct:free";
 const DEFAULT_TIMEOUT_MS = 120_000; // 2 minutes — free tier can be slow
 const MAX_RETRIES = 3;
-
-// Singleton ZAI instance
-let zaiInstance: Awaited<ReturnType<typeof ZAI.create>> | null = null;
-
-async function getZAI() {
-  if (!zaiInstance) {
-    zaiInstance = await ZAI.create();
-  }
-  return zaiInstance;
-}
-
-/**
- * Determine which LLM provider to use.
- * If OPENROUTER_API_KEY is set, use OpenRouter; otherwise use z-ai-web-dev-sdk.
- */
-function shouldUseOpenRouter(): boolean {
-  return !!process.env.OPENROUTER_API_KEY;
-}
 
 export interface ChatCompletionOptions {
   model?: string;
@@ -53,57 +29,9 @@ export interface ChatCompletionResult {
 }
 
 /**
- * Call LLM via z-ai-web-dev-sdk.
- * Note: z-ai-web-dev-sdk uses 'assistant' role for system prompts.
- */
-async function createChatCompletionZAI(
-  systemPrompt: string,
-  userMessage: string,
-  options?: ChatCompletionOptions
-): Promise<ChatCompletionResult> {
-  const zai = await getZAI();
-
-  let lastError: Error | null = null;
-
-  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-    try {
-      const completion = await zai.chat.completions.create({
-        messages: [
-          { role: "assistant", content: systemPrompt },
-          { role: "user", content: userMessage },
-        ],
-        thinking: { type: "disabled" },
-      });
-
-      const content = completion.choices?.[0]?.message?.content;
-
-      if (!content || content.trim().length === 0) {
-        throw new Error("z-ai-web-dev-sdk returned an empty response.");
-      }
-
-      return {
-        content,
-        usage: undefined, // z-ai-web-dev-sdk doesn't expose usage stats in the same format
-      };
-    } catch (err: unknown) {
-      lastError = err instanceof Error ? err : new Error(String(err));
-      const backoff = Math.min(2000 * attempt, 15_000);
-      console.warn(
-        `[ZAI] Request failed: ${lastError.message}. Retrying in ${backoff}ms (attempt ${attempt}/${MAX_RETRIES})`
-      );
-      await sleep(backoff);
-    }
-  }
-
-  throw new Error(
-    `z-ai-web-dev-sdk request failed after ${MAX_RETRIES} retries: ${lastError?.message ?? "Unknown error"}`
-  );
-}
-
-/**
  * Call LLM via OpenRouter API.
  */
-async function createChatCompletionOpenRouter(
+export async function createChatCompletion(
   systemPrompt: string,
   userMessage: string,
   options?: ChatCompletionOptions
@@ -216,25 +144,6 @@ async function createChatCompletionOpenRouter(
   throw new Error(
     `OpenRouter request failed after ${MAX_RETRIES} retries: ${lastError?.message ?? "Unknown error"}`
   );
-}
-
-/**
- * Unified: call the LLM via the configured provider.
- * - If OPENROUTER_API_KEY is set → use OpenRouter (qwen/qwen3-coder:free)
- * - Otherwise → use z-ai-web-dev-sdk (built-in, no key needed)
- */
-export async function createChatCompletion(
-  systemPrompt: string,
-  userMessage: string,
-  options?: ChatCompletionOptions
-): Promise<ChatCompletionResult> {
-  if (shouldUseOpenRouter()) {
-    console.log("[LLM] Using OpenRouter provider");
-    return createChatCompletionOpenRouter(systemPrompt, userMessage, options);
-  } else {
-    console.log("[LLM] Using z-ai-web-dev-sdk provider");
-    return createChatCompletionZAI(systemPrompt, userMessage, options);
-  }
 }
 
 // ─── Robust JSON Repair ────────────────────────────────────────────────
