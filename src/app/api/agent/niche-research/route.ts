@@ -19,28 +19,42 @@ export async function POST(request: NextRequest) {
 
     const effectiveSubNiche = customNiche || subNiche;
 
-    // ── Step 1: Web search for market data ──────────────────────────────
-    const zai = await ZAI.create();
+    // ── Step 1: Web search for market data (resilient — failures don't crash) ──
+    let searchContext = "No web search data available — proceed with general knowledge.";
 
-    const [searchResult1, searchResult2] = await Promise.all([
-      zai.functions.invoke("web_search", {
-        query: `ebook ${effectiveSubNiche} market trends profitability 2024 2025`,
-        num: 8,
-      }),
-      zai.functions.invoke("web_search", {
-        query: `best selling ebooks ${effectiveSubNiche} ${niche}`,
-        num: 8,
-      }),
-    ]);
+    try {
+      const zai = await ZAI.create();
 
-    // Format search results for the LLM
-    const searchContext = [
-      "=== SEARCH RESULTS: Market Trends ===",
-      JSON.stringify(searchResult1, null, 2),
-      "",
-      "=== SEARCH RESULTS: Best Selling Ebooks ===",
-      JSON.stringify(searchResult2, null, 2),
-    ].join("\n");
+      const [searchResult1, searchResult2] = await Promise.allSettled([
+        zai.functions.invoke("web_search", {
+          query: `ebook ${effectiveSubNiche} market trends profitability 2024 2025`,
+          num: 8,
+        }),
+        zai.functions.invoke("web_search", {
+          query: `best selling ebooks ${effectiveSubNiche} ${niche}`,
+          num: 8,
+        }),
+      ]);
+
+      const parts: string[] = [];
+      if (searchResult1.status === "fulfilled") {
+        parts.push("=== SEARCH RESULTS: Market Trends ===\n" + JSON.stringify(searchResult1.value, null, 2));
+      } else {
+        console.warn("[Niche Research] Search 1 failed:", searchResult1.reason);
+      }
+      if (searchResult2.status === "fulfilled") {
+        parts.push("=== SEARCH RESULTS: Best Selling Ebooks ===\n" + JSON.stringify(searchResult2.value, null, 2));
+      } else {
+        console.warn("[Niche Research] Search 2 failed:", searchResult2.reason);
+      }
+
+      if (parts.length > 0) {
+        searchContext = parts.join("\n\n");
+      }
+    } catch (searchErr) {
+      console.warn("[Niche Research] Web search failed entirely:", searchErr);
+      // Continue without search data
+    }
 
     // ── Step 2: LLM analysis ────────────────────────────────────────────
     const userMessage = [

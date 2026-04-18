@@ -57,7 +57,12 @@ export async function POST(request: NextRequest) {
     }
 
     // ── Initialize ZAI for web search ──────────────────────────────────
-    const zai = await ZAI.create();
+    let zai: Awaited<ReturnType<typeof ZAI.create>> | null = null;
+    try {
+      zai = await ZAI.create();
+    } catch (zaiErr) {
+      console.warn("[SeoOptimize] ZAI init failed:", zaiErr);
+    }
 
     // ── Process each book ──────────────────────────────────────────────
     const results: SeoSalesResult[] = [];
@@ -78,43 +83,34 @@ export async function POST(request: NextRequest) {
         .map((ch) => ch.title)
         .join(", ");
 
-      // ── Web search for SEO keywords ───────────────────────────────────
-      let searchKeywordData = "";
-      try {
-        const [seoResults, popularResults] = await Promise.all([
-          zai.functions.invoke("web_search", {
-            query: `seo keywords ${book.prompt} ebook`,
-            num: 5,
-          }),
-          zai.functions.invoke("web_search", {
-            query: `${book.prompt} popular search terms`,
-            num: 5,
-          }),
-        ]);
+      // ── Web search for SEO keywords (resilient) ───────────────────────
+      let searchKeywordData = "Web search unavailable — proceed with general SEO knowledge.";
+      if (zai) {
+        try {
+          const [seoResults, popularResults] = await Promise.allSettled([
+            zai.functions.invoke("web_search", {
+              query: `seo keywords ${book.prompt} ebook`,
+              num: 5,
+            }),
+            zai.functions.invoke("web_search", {
+              query: `${book.prompt} popular search terms`,
+              num: 5,
+            }),
+          ]);
 
-        const formatSearchResults = (results: unknown): string => {
-          if (!results) return "No results";
-          if (typeof results === "string") return results;
-          try {
-            return JSON.stringify(results, null, 2);
-          } catch {
-            return String(results);
+          const parts: string[] = [];
+          if (seoResults.status === "fulfilled") {
+            parts.push("SEO Keywords Search Results:\n" + JSON.stringify(seoResults.value, null, 2));
           }
-        };
-
-        searchKeywordData = [
-          "SEO Keywords Search Results:",
-          formatSearchResults(seoResults),
-          "",
-          "Popular Search Terms Results:",
-          formatSearchResults(popularResults),
-        ].join("\n");
-      } catch (searchErr) {
-        console.warn(
-          `[SeoOptimize] Web search failed for book ${bookId}:`,
-          searchErr
-        );
-        searchKeywordData = "Web search unavailable — proceed with general SEO knowledge.";
+          if (popularResults.status === "fulfilled") {
+            parts.push("Popular Search Terms Results:\n" + JSON.stringify(popularResults.value, null, 2));
+          }
+          if (parts.length > 0) {
+            searchKeywordData = parts.join("\n\n");
+          }
+        } catch (searchErr) {
+          console.warn(`[SeoOptimize] Web search failed for book ${bookId}:`, searchErr);
+        }
       }
 
       // ── Competition pricing context ───────────────────────────────────
@@ -164,10 +160,7 @@ export async function POST(request: NextRequest) {
 
         results.push(seoResult);
       } catch (llmErr) {
-        console.error(
-          `[SeoOptimize] LLM failed for book ${bookId}:`,
-          llmErr
-        );
+        console.error(`[SeoOptimize] LLM failed for book ${bookId}:`, llmErr);
         results.push({
           bookId,
           bookTitle,

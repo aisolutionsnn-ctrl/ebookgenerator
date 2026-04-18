@@ -29,28 +29,41 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // ── Step 1: Web search for competition data ─────────────────────────
-    const zai = await ZAI.create();
+    // ── Step 1: Web search for competition data (resilient) ──────────────
+    let searchContext = "No web search data available — proceed with general knowledge.";
 
-    const [searchResult1, searchResult2] = await Promise.all([
-      zai.functions.invoke("web_search", {
-        query: `ebook ${subNiche} site:amazon.com OR site:gumroad.com OR site:payhip.com`,
-        num: 8,
-      }),
-      zai.functions.invoke("web_search", {
-        query: `best ${subNiche} ebooks buy`,
-        num: 8,
-      }),
-    ]);
+    try {
+      const zai = await ZAI.create();
 
-    // Format search results for the LLM
-    const searchContext = [
-      "=== SEARCH RESULTS: Platform Listings ===",
-      JSON.stringify(searchResult1, null, 2),
-      "",
-      "=== SEARCH RESULTS: Best Ebooks to Buy ===",
-      JSON.stringify(searchResult2, null, 2),
-    ].join("\n");
+      const [searchResult1, searchResult2] = await Promise.allSettled([
+        zai.functions.invoke("web_search", {
+          query: `ebook ${subNiche} site:amazon.com OR site:gumroad.com OR site:payhip.com`,
+          num: 8,
+        }),
+        zai.functions.invoke("web_search", {
+          query: `best ${subNiche} ebooks buy`,
+          num: 8,
+        }),
+      ]);
+
+      const parts: string[] = [];
+      if (searchResult1.status === "fulfilled") {
+        parts.push("=== SEARCH RESULTS: Platform Listings ===\n" + JSON.stringify(searchResult1.value, null, 2));
+      } else {
+        console.warn("[Competition] Search 1 failed:", searchResult1.reason);
+      }
+      if (searchResult2.status === "fulfilled") {
+        parts.push("=== SEARCH RESULTS: Best Ebooks to Buy ===\n" + JSON.stringify(searchResult2.value, null, 2));
+      } else {
+        console.warn("[Competition] Search 2 failed:", searchResult2.reason);
+      }
+
+      if (parts.length > 0) {
+        searchContext = parts.join("\n\n");
+      }
+    } catch (searchErr) {
+      console.warn("[Competition] Web search failed entirely:", searchErr);
+    }
 
     // ── Step 2: LLM competition analysis ────────────────────────────────
     const userMessage = [

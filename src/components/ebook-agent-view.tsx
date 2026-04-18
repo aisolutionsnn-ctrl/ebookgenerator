@@ -2,7 +2,7 @@
 
 import { useState, useCallback } from "react";
 import {
-  BookOpen, Search, Trophy, CheckSquare, TrendingUp, Image,
+  BookOpen, Search, Trophy, CheckSquare, TrendingUp, Image as ImageIcon,
   Loader2, ChevronRight, ChevronLeft, Copy, CheckCircle, Sparkles,
   RefreshCw, Download, Star, DollarSign, Tag, FileText, ExternalLink,
 } from "lucide-react";
@@ -50,7 +50,7 @@ const STEPS = [
   { num: 2, label: "Competition & Generate", icon: Trophy, desc: "Analyze competitors, generate books" },
   { num: 3, label: "Quality Assessment", icon: CheckSquare, desc: "Evaluate book quality" },
   { num: 4, label: "SEO & Sales Prep", icon: TrendingUp, desc: "Optimize for sales" },
-  { num: 5, label: "Cover Image", icon: Image, desc: "Generate cover prompts" },
+  { num: 5, label: "Cover Image", icon: ImageIcon, desc: "Generate cover prompts" },
 ];
 
 // ─── Main Component ──────────────────────────────────────────────────
@@ -1038,7 +1038,7 @@ function Step5Cover({
     <div className="space-y-6">
       <div className="text-center space-y-2 mb-4">
         <h2 className="text-2xl font-bold flex items-center justify-center gap-2">
-          <Image className="w-6 h-6 text-primary" /> Cover Image
+          <ImageIcon className="w-6 h-6 text-primary" /> Cover Image
         </h2>
         <p className="text-muted-foreground">Generate AI cover image prompts for your books</p>
       </div>
@@ -1053,7 +1053,7 @@ function Step5Cover({
             <div className="flex flex-wrap gap-2">
               {remainingBooks.map((bookId) => (
                 <Button key={bookId} variant="outline" size="sm" onClick={() => onGeneratePrompt(bookId)} disabled={loading}>
-                  {loading ? <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" /> : <Image className="w-3.5 h-3.5 mr-1" />}
+                  {loading ? <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" /> : <ImageIcon className="w-3.5 h-3.5 mr-1" />}
                   Generate for {bookId.slice(0, 8)}...
                 </Button>
               ))}
@@ -1110,7 +1110,7 @@ function Step5Cover({
               {loading ? (
                 <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Generating cover image...</>
               ) : (
-                <><Image className="w-4 h-4 mr-2" /> Generate Cover Image</>
+                <><ImageIcon className="w-4 h-4 mr-2" /> Generate Cover Image</>
               )}
             </Button>
 

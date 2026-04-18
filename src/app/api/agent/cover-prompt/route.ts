@@ -103,7 +103,7 @@ export async function POST(request: NextRequest) {
 
         const fullPrompt = coverPrompt + (styleModifier ? ` ${styleModifier}` : "");
 
-        const imageResult = await zai.images.generate({
+        const imageResult = await zai.images.generations.create({
           prompt: fullPrompt,
           size: "768x1152", // ebook cover aspect ratio (2:3)
         });
@@ -117,8 +117,8 @@ export async function POST(request: NextRequest) {
         const fileName = `${bookId}.png`;
         const filePath = path.join(coversDir, fileName);
 
-        // The SDK returns base64 data
-        const base64Data = imageResult.base64 ?? imageResult.data ?? "";
+        // The SDK returns base64 data in data[0].base64
+        const base64Data = imageResult.data?.[0]?.base64 ?? "";
         if (base64Data) {
           const buffer = Buffer.from(base64Data, "base64");
           fs.writeFileSync(filePath, buffer);
